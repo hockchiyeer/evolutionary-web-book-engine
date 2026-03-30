@@ -85,6 +85,7 @@ export async function searchAndExtract(query: string): Promise<WebPageGenotype[]
     4. An assessment of its "Informative Value" (0-1) based on depth of definitions.
     5. An assessment of its "Authority" (0-1) based on source credibility.`,
     config: {
+      systemInstruction: "You are a precise data extractor. Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array for that source's definitions.",
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
       maxOutputTokens: 4000,
@@ -249,7 +250,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
     4. 2 sub-topics to explore.
     5. A visual seed keyword for an image.`,
     config: {
-      systemInstruction: "You are a master book architect. Output valid JSON only. Create a 10-chapter outline that flows logically from introduction to advanced concepts and future outlook.",
+      systemInstruction: "You are a master book architect. Output valid JSON only. Create a 10-chapter outline that flows logically from introduction to advanced concepts and future outlook. Ensure all terms and sub-topics are meaningful and relevant to the topic. Strictly avoid placeholders, random strings, or meaningless identifiers.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -308,7 +309,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       Also provide detailed definitions for: ${chapterOutline.terms.join(', ')}.
       And detailed analyses for the sub-topics: ${chapterOutline.subTopicTitles.join(', ')}.`,
       config: {
-        systemInstruction: "You are an expert technical writer. Output valid JSON only. Be detailed, authoritative, and academic in tone.",
+        systemInstruction: "You are an expert technical writer. Output valid JSON only. Be detailed, authoritative, and academic in tone. Ensure all definitions and sub-topic analyses are meaningful, human-readable, and relevant to the chapter. Strictly avoid generating random numbers, long strings of digits, or meaningless placeholder text.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -347,11 +348,24 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       chapterData = JSON.parse(repairTruncatedJSON(chapterResponse.text));
     }
 
+    const isMeaningful = (text: string) => {
+      if (!text) return false;
+      // Filter out strings that are mostly digits or look like random IDs
+      if (/^\d+$/.test(text.replace(/\s/g, ''))) return false;
+      if (text.length > 50 && !text.includes(' ')) return false;
+      if (/^[a-zA-Z0-9]{15,}$/.test(text) && !/[aeiou]/i.test(text)) return false; // Random hex/alphanumeric
+      return true;
+    };
+
     return {
       title: chapterOutline.title,
       content: chapterData?.content || "Content generation failed.",
-      definitions: (chapterData?.definitions || []).map((d: any) => ({ ...d, sourceUrl: "Synthesized" })),
-      subTopics: (chapterData?.subTopics || []).map((s: any) => ({ ...s, sourceUrl: "Synthesized" })),
+      definitions: (chapterData?.definitions || [])
+        .filter((d: any) => isMeaningful(d.term))
+        .map((d: any) => ({ ...d, sourceUrl: "Synthesized" })),
+      subTopics: (chapterData?.subTopics || [])
+        .filter((s: any) => isMeaningful(s.title))
+        .map((s: any) => ({ ...s, sourceUrl: "Synthesized" })),
       sourceUrls: truncatedData.map(d => d.title),
       visualSeed: chapterOutline.visualSeed || "evolution"
     };

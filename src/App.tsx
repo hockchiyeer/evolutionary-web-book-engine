@@ -47,6 +47,8 @@ export default function App() {
   const [isExporting, setIsExporting] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [isHoveringInput, setIsHoveringInput] = useState(false);
 
   // Close export options when clicking outside
   useEffect(() => {
@@ -75,6 +77,30 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('webbook_history', JSON.stringify(history));
   }, [history]);
+
+  // Check if search query overflows the input box width for accessibility tooltip
+  useEffect(() => {
+    if (textareaRef.current && query) {
+      const el = textareaRef.current;
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (context) {
+        const style = window.getComputedStyle(el);
+        context.font = style.font;
+        const metrics = context.measureText(query);
+        const textWidth = metrics.width;
+        
+        const paddingLeft = parseFloat(style.paddingLeft);
+        const paddingRight = parseFloat(style.paddingRight);
+        // Subtract button space too (pr-14 is 56px)
+        const availableWidth = el.clientWidth - paddingLeft - paddingRight;
+        
+        setIsOverflowing(textWidth > availableWidth);
+      }
+    } else {
+      setIsOverflowing(false);
+    }
+  }, [query]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,7 +253,7 @@ export default function App() {
     }, 800);
   };
 
-  const exportToWord = () => {
+  const exportToWord = async () => {
     if (!webBook) return;
     const element = document.querySelector('.web-book-container');
     if (!element) return;
@@ -235,20 +261,36 @@ export default function App() {
     setIsExporting(true);
     setShowExportOptions(false);
 
-    setTimeout(() => {
+    try {
       // Create a clone to modify for Word export
       const clone = element.cloneNode(true) as HTMLElement;
       
-      // Remove elements that don't translate well to Word or cause "long strings"
-      clone.querySelectorAll('button, .print\\:hidden').forEach(el => el.remove());
+      // Remove elements that don't translate well
+      clone.querySelectorAll('button, .print\\:hidden, [data-html2canvas-ignore]').forEach(el => el.remove());
       
-      // Ensure images have absolute URLs and are styled simply
-      clone.querySelectorAll('img').forEach(img => {
+      // Convert images to base64 to ensure they are embedded in Word
+      const images = clone.querySelectorAll('img');
+      for (const img of Array.from(images)) {
+        try {
+          const response = await fetch(img.src, { mode: 'cors' });
+          if (response.ok) {
+            const blob = await response.blob();
+            const base64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            img.src = base64;
+          }
+        } catch (e) {
+          console.error("Failed to convert image to base64 for Word export", e);
+        }
         img.style.maxWidth = '100%';
         img.style.height = 'auto';
         img.style.display = 'block';
         img.style.margin = '20px auto';
-      });
+      }
 
       const htmlContent = clone.innerHTML;
       const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' "+
@@ -269,8 +311,11 @@ export default function App() {
       a.download = `${webBook.topic.replace(/\s+/g, '_')}.doc`;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Word export failed:", err);
+    } finally {
       setIsExporting(false);
-    }, 800);
+    }
   };
 
   const exportToPDF = () => {
@@ -316,14 +361,17 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
       {/* Header */}
-      <header className="border-b border-[#141414] p-4 md:p-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-[#E4E3E0] sticky top-0 z-50 print:hidden">
+      <header 
+        data-html2canvas-ignore="true"
+        className="border-b border-[#141414] p-4 md:p-6 flex flex-col md:flex-row justify-between items-center gap-4 bg-[#E4E3E0] sticky top-0 z-50 print:hidden"
+      >
         <div className="flex items-center gap-3 w-full md:w-auto">
           <div className="w-10 h-10 bg-[#141414] flex items-center justify-center rounded-sm shrink-0">
             <Dna className="text-[#E4E3E0] w-6 h-6" />
           </div>
           <div className="overflow-hidden">
             <h1 className="text-lg md:text-xl font-bold tracking-tighter uppercase italic font-serif truncate">Evolutionary Web-Book Engine</h1>
-            <p className="text-[9px] md:text-[10px] uppercase tracking-widest opacity-60 truncate">Mitigating Search Redundancy via EC</p>
+            <p className="text-[9px] md:text-[10px] uppercase tracking-widest opacity-60 truncate">Mitigating Search Redundancy via Evolutionary Computing</p>
           </div>
         </div>
 
@@ -425,7 +473,10 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 print:block print:p-0">
         {/* Left Column: Search & Status */}
-        <div className="lg:col-span-4 space-y-8 print:hidden">
+        <div 
+          data-html2canvas-ignore="true"
+          className="lg:col-span-4 space-y-8 print:hidden"
+        >
           <section className="bg-white border border-[#141414] p-6 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
             <div className="flex justify-between items-center mb-4">
               <h2 className="font-serif italic text-sm uppercase opacity-50">Targeted Ingestion</h2>
@@ -437,11 +488,40 @@ export default function App() {
               </button>
             </div>
             <form onSubmit={handleSearch} className="relative">
+              <AnimatePresence>
+                {isOverflowing && isHoveringInput && query && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute bottom-full left-0 mb-3 w-full z-[60] pointer-events-none"
+                  >
+                    <div className="bg-yellow-300 text-[#141414] p-4 border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(20,20,20,1)] text-sm font-mono break-words">
+                      <div className="flex items-center gap-2 mb-2 opacity-70 text-[10px] uppercase font-bold tracking-widest">
+                        <Info size={12} className="text-[#141414]" /> Full Search Query Preview
+                      </div>
+                      <div className="leading-relaxed">
+                        {query}
+                      </div>
+                      <div className="mt-2 text-[9px] opacity-40 italic">
+                        Text exceeds box width. Showing full query for accessibility.
+                      </div>
+                    </div>
+                    {/* Tooltip Arrow */}
+                    <div className="absolute -bottom-2 left-8 w-4 h-4 bg-yellow-300 border-r-2 border-b-2 border-[#141414] rotate-45" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <textarea 
                 ref={textareaRef}
                 rows={1}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onMouseEnter={() => setIsHoveringInput(true)}
+                onMouseLeave={() => setIsHoveringInput(false)}
+                onFocus={() => setIsHoveringInput(true)}
+                onBlur={() => setIsHoveringInput(false)}
                 placeholder="Enter search topic..."
                 className="w-full bg-[#F5F5F5] border border-[#141414] p-4 pr-14 focus:outline-none focus:ring-0 text-lg font-mono resize-none overflow-y-auto max-h-32"
                 style={{ height: 'auto', minHeight: '60px' }}
@@ -700,7 +780,15 @@ export default function App() {
                                   <BookOpen size={16} /> Technical Glossary
                                 </h4>
                                 <div className="space-y-8">
-                                  {chapter.definitions.map((def, j) => (
+                                  {chapter.definitions
+                                    .filter(def => {
+                                      const term = def.term || "";
+                                      // Filter out mostly-digit strings or very long strings without spaces
+                                      if (/^\d+$/.test(term.replace(/\s/g, ''))) return false;
+                                      if (term.length > 40 && !term.includes(' ')) return false;
+                                      return true;
+                                    })
+                                    .map((def, j) => (
                                     <div key={j} className="group">
                                       <span className="font-mono text-[12px] font-bold block mb-3 uppercase text-blue-400 tracking-wider break-words">
                                         {def.term}
@@ -731,15 +819,15 @@ export default function App() {
                     ))}
                   </div>
 
-                  {/* Document Footer - Outside of export container for clean exports */}
-                  <div className="p-16 bg-[#F5F5F5] border-t border-[#141414] flex flex-col md:flex-row justify-between items-center gap-8 print:hidden w-full max-w-[850px]">
+                  {/* Document Footer - Inside export container for inclusion in PDF/Word */}
+                  <div className="p-16 bg-[#F5F5F5] border-t border-[#141414] flex flex-col md:flex-row justify-between items-center gap-8 w-full">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
                         <CheckCircle2 className="text-green-600" size={20} />
                       </div>
                       <div className="flex flex-col">
                         <span className="text-[10px] uppercase font-bold tracking-widest">Synthesis Verified</span>
-                        <span className="text-[9px] opacity-50 font-mono">Engine v2.5 • Evolutionary Pass Complete</span>
+                        <span className="text-[9px] opacity-50 font-mono text-left">Engine v2.5 • Evolutionary Pass Complete</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
@@ -769,12 +857,14 @@ export default function App() {
               exit={{ opacity: 0 }}
               onClick={() => setShowHistory(false)}
               className="fixed inset-0 bg-[#141414]/40 backdrop-blur-sm z-[100]"
+              data-html2canvas-ignore="true"
             />
             <motion.div 
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-[#E4E3E0] border-l border-[#141414] z-[101] shadow-2xl flex flex-col"
+              data-html2canvas-ignore="true"
             >
               <div className="p-6 border-b border-[#141414] flex justify-between items-center bg-white">
                 <h2 className="text-lg font-serif italic font-bold flex items-center gap-2">
