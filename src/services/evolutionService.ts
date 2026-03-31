@@ -349,9 +349,12 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       chapterData = JSON.parse(repairTruncatedJSON(chapterResponse.text));
     }
 
-    const isMeaningful = (text: string) => {
+    const isMeaningful = (text: string, description?: string) => {
       if (!text) return false;
       const clean = text.replace(/\s/g, '');
+      const lowerText = text.toLowerCase();
+      const lowerDesc = (description || "").toLowerCase();
+      
       // Filter out strings that are mostly digits
       if (/^\d+$/.test(clean)) return false;
       // Filter out long sequences of the same character (repetitive noise)
@@ -362,18 +365,100 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       if (text.length > 40 && !text.includes(' ')) return false;
       // Filter out strings that look like random hex/alphanumeric (no vowels and long)
       if (clean.length > 12 && !/[aeiou]/i.test(clean)) return false;
+
+      // Detect repetitive substrings within a single word (e.g., "abc-abc-abc")
+      const parts = clean.split(/[-_]/);
+      if (parts.length > 3) {
+        const uniqueParts = new Set(parts);
+        if (uniqueParts.size < parts.length / 2) return false;
+      }
+      
+      // Specific check for the reported "TCXGSD-0126" repetitive pattern
+      if (clean.includes('TCXGSD') && clean.length > 30) {
+        const tcxCount = (clean.match(/TCXGSD/g) || []).length;
+        if (tcxCount > 2) return false;
+      }
+
+      // General check for repetitive patterns like "ABC-123-ABC-123"
+      const repetitivePattern = /(.{4,})\1{2,}/;
+      if (repetitivePattern.test(clean)) return false;
+
+      // Filter out "data-poisoning", boilerplate, or irrelevant legal/security texts
+      const poisonKeywords = [
+        'copyright', 'rights reserved', 'terms of service', 'privacy policy',
+        'unauthorized access', 'cybersecurity', 'protected by', 'cookie policy',
+        'scrapping', 'bot detection', 'access denied', 'legal notice', 'disclaimer',
+        'all rights', 'terms of use', 'security warning', 'intellectual property',
+        'proprietary information', 'confidentiality', 'amen so be it', 'and so it shall be',
+        'for all eternity', 'grand design of the universe'
+      ];
+      if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
+
+      // Detect repetitive word patterns (e.g., "and its ... and its ...")
+      const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
+      if (words.length > 30) {
+        const uniqueWords = new Set(words);
+        const uniqueRatio = uniqueWords.size / words.length;
+        // If unique words are less than 35% of total words in a long string, it's likely repetitive noise
+        if (uniqueRatio < 0.35) return false;
+        
+        // Specific check for the reported "and its/our/the/all" pattern
+        const andItsCount = (lowerText.match(/and its/g) || []).length + (lowerDesc.match(/and its/g) || []).length;
+        const andOurCount = (lowerText.match(/and our/g) || []).length + (lowerDesc.match(/and our/g) || []).length;
+        const andTheCount = (lowerText.match(/and the/g) || []).length + (lowerDesc.match(/and the/g) || []).length;
+        const andAllCount = (lowerText.match(/and all/g) || []).length + (lowerDesc.match(/and all/g) || []).length;
+        if (andItsCount > 4 || andOurCount > 4 || andTheCount > 8 || andAllCount > 4) return false;
+
+        // General check for any 2-word phrase repeated more than 3 times
+        for (let i = 0; i < words.length - 1; i++) {
+          const phrase = `${words[i]} ${words[i+1]}`;
+          if (phrase.length < 5) continue;
+          let count = 0;
+          for (let j = 0; j < words.length - 1; j++) {
+            if (`${words[j]} ${words[j+1]}` === phrase) count++;
+          }
+          if (count > 3) return false;
+        }
+      }
+
+      // Filter out raw assembly or machine code heuristics
+      const assemblyHeuristic = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
+      if (assemblyHeuristic.test(text) || assemblyHeuristic.test(description || "")) return false;
+      if (/[0-9a-f]{2,}\s[0-9a-f]{2,}\s[0-9a-f]{2,}/i.test(text)) return false; // Hex bytes pattern
+
       return true;
     };
 
+    const content = chapterData?.content || "Content generation failed.";
+    const isContentMeaningful = isMeaningful(content);
+
+    const uniqueTerms = new Set();
+    const filteredDefinitions = (chapterData?.definitions || [])
+      .filter((d: any) => {
+        if (!isMeaningful(d.term, d.description)) return false;
+        const termKey = (d.term || "").toLowerCase().trim();
+        if (uniqueTerms.has(termKey)) return false;
+        uniqueTerms.add(termKey);
+        return true;
+      })
+      .map((d: any) => ({ ...d, sourceUrl: truncatedData[0]?.url || "Synthesized" }));
+
+    const uniqueSubTopics = new Set();
+    const filteredSubTopics = (chapterData?.subTopics || [])
+      .filter((s: any) => {
+        if (!isMeaningful(s.title)) return false;
+        const subKey = (s.title || "").toLowerCase().trim();
+        if (uniqueSubTopics.has(subKey)) return false;
+        uniqueSubTopics.add(subKey);
+        return true;
+      })
+      .map((s: any) => ({ ...s, sourceUrl: truncatedData[0]?.url || "Synthesized" }));
+
     return {
       title: chapterOutline.title,
-      content: chapterData?.content || "Content generation failed.",
-      definitions: (chapterData?.definitions || [])
-        .filter((d: any) => isMeaningful(d.term))
-        .map((d: any) => ({ ...d, sourceUrl: truncatedData[0]?.url || "Synthesized" })),
-      subTopics: (chapterData?.subTopics || [])
-        .filter((s: any) => isMeaningful(s.title))
-        .map((s: any) => ({ ...s, sourceUrl: truncatedData[0]?.url || "Synthesized" })),
+      content: isContentMeaningful ? content : "Content generation failed due to quality checks. The generated content was detected as repetitive or meaningless. Please try again.",
+      definitions: filteredDefinitions,
+      subTopics: filteredSubTopics,
       sourceUrls: truncatedData.map(d => ({ title: d.title, url: d.url })),
       visualSeed: chapterOutline.visualSeed || "evolution"
     };

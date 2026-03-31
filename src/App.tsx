@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import html2pdf from 'html2pdf.js';
 import React, { useState, useEffect, useRef } from 'react';
+
+// Declare html2pdf as a global variable to avoid TypeScript errors
+// It is loaded via CDN in index.html to avoid module resolution issues
+declare const html2pdf: any;
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -27,7 +30,8 @@ import {
   Download,
   FileText,
   FileCode,
-  ChevronDown
+  ChevronDown,
+  Printer
 } from 'lucide-react';
 import { WebBook, WebPageGenotype, EvolutionState } from './types';
 
@@ -272,19 +276,45 @@ export default function App() {
       const images = clone.querySelectorAll('img');
       for (const img of Array.from(images)) {
         try {
-          const response = await fetch(img.src, { mode: 'cors' });
-          if (response.ok) {
-            const blob = await response.blob();
-            const base64 = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-            img.src = base64;
-          }
+          // Use a canvas to convert image to base64, which is more reliable than fetch for some cases
+          // and allows us to strip filters like grayscale
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const tempImg = new Image();
+          tempImg.crossOrigin = 'anonymous';
+          
+          await new Promise((resolve, reject) => {
+            tempImg.onload = resolve;
+            tempImg.onerror = reject;
+            tempImg.src = img.src;
+          });
+
+          canvas.width = tempImg.width;
+          canvas.height = tempImg.height;
+          ctx?.drawImage(tempImg, 0, 0);
+          img.src = canvas.toDataURL('image/jpeg', 0.8);
+          
+          // Clear any filters that might prevent Word from displaying the image
+          img.style.filter = 'none';
+          img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
         } catch (e) {
           console.error("Failed to convert image to base64 for Word export", e);
+          // Fallback to original fetch method if canvas fails
+          try {
+            const response = await fetch(img.src, { mode: 'cors' });
+            if (response.ok) {
+              const blob = await response.blob();
+              const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+              });
+              img.src = base64;
+            }
+          } catch (fetchErr) {
+            console.error("Fetch fallback also failed", fetchErr);
+          }
         }
         img.style.maxWidth = '100%';
         img.style.height = 'auto';
@@ -292,12 +322,26 @@ export default function App() {
         img.style.margin = '20px auto';
       }
 
+      // Add name anchors for TOC links to work better in Word
+      clone.querySelectorAll('[id^="chapter-"]').forEach(el => {
+        const id = el.getAttribute('id');
+        const anchor = document.createElement('a');
+        anchor.setAttribute('name', id || '');
+        el.prepend(anchor);
+      });
+
       const htmlContent = clone.innerHTML;
       const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' "+
               "xmlns:w='urn:schemas-microsoft-com:office:word' "+
               "xmlns='http://www.w3.org/TR/REC-html40'>"+
               "<head><meta charset='utf-8'><title>WebBook Export</title>"+
-              "<style>body { font-family: 'Arial', sans-serif; } img { max-width: 100%; }</style></head><body>";
+              "<style>"+
+              "body { font-family: 'Arial', sans-serif; } "+
+              "img { max-width: 100%; height: auto; display: block; margin: 20px auto; } "+
+              "h2, h3, h4 { font-family: 'Georgia', serif; } "+
+              "a { text-decoration: none; color: inherit; } "+
+              ".font-mono { font-family: 'Courier New', monospace; } "+
+              "</style></head><body>";
       const footer = "</body></html>";
       const sourceHTML = header + htmlContent + footer;
       
@@ -318,7 +362,7 @@ export default function App() {
     }
   };
 
-  const exportToPDF = () => {
+  const exportToPDF = async () => {
     if (!webBook) return;
     const element = document.querySelector('.web-book-container');
     if (!element) return;
@@ -326,24 +370,148 @@ export default function App() {
     setIsExporting(true);
     setShowExportOptions(false);
 
-    const opt: any = {
-      margin: [10, 10] as [number, number],
-      filename: `${webBook.topic.replace(/\s+/g, '_')}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, logging: false },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-    };
+    // Use a small delay to allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 100));
 
-    setTimeout(() => {
-      html2pdf().from(element as HTMLElement).set(opt).save().then(() => {
-        setIsExporting(false);
-      }).catch((err: any) => {
-        console.error("PDF Export failed:", err);
-        setIsExporting(false);
-        alert("PDF export failed. Please try the 'HTML Webpage' option or use your browser's print function.");
-      });
-    }, 1000);
+    try {
+      // Create a simplified clone for PDF
+      const clone = element.cloneNode(true) as HTMLElement;
+      
+      // Remove heavy elements
+      clone.querySelectorAll('button, .print\\:hidden, [data-html2canvas-ignore]').forEach(el => el.remove());
+      
+      // Simplify styles
+      clone.style.width = '800px'; 
+      clone.style.background = 'white';
+      clone.style.boxShadow = 'none';
+      clone.style.margin = '0';
+      clone.style.position = 'absolute';
+      clone.style.left = '-9999px';
+      clone.style.top = '0';
+      document.body.appendChild(clone);
+      
+      // Fast image processing - only convert if necessary and use lower quality
+      const images = clone.querySelectorAll('img');
+      for (const img of Array.from(images)) {
+        try {
+          // Skip if already base64
+          if (img.src.startsWith('data:')) continue;
+          
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const tempImg = new Image();
+          tempImg.crossOrigin = 'anonymous';
+          
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Image load timeout")), 3000);
+            tempImg.onload = () => { clearTimeout(timeout); resolve(null); };
+            tempImg.onerror = () => { clearTimeout(timeout); reject(new Error("Image load error")); };
+            tempImg.src = img.src;
+          });
+
+          // Downscale for PDF to save memory
+          const maxDim = 1200;
+          let w = tempImg.width;
+          let h = tempImg.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) { h = (h / w) * maxDim; w = maxDim; }
+            else { w = (w / h) * maxDim; h = maxDim; }
+          }
+
+          canvas.width = w;
+          canvas.height = h;
+          ctx?.drawImage(tempImg, 0, 0, w, h);
+          img.src = canvas.toDataURL('image/jpeg', 0.6); // Lower quality for speed/memory
+          
+          img.style.filter = 'none';
+          img.style.boxShadow = 'none';
+          img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
+        } catch (e) {
+          console.warn("Skipping image in PDF export:", e);
+          // If image fails, we just leave it or remove it to prevent freeze
+          img.style.display = 'none';
+        }
+      }
+
+      const opt: any = {
+        margin: [10, 10] as [number, number],
+        filename: `${webBook.topic.replace(/\s+/g, '_')}.pdf`,
+        image: { type: 'jpeg', quality: 0.8 },
+        html2canvas: { 
+          scale: 1, 
+          useCORS: false, 
+          logging: false,
+          letterRendering: true,
+          allowTaint: true,
+          removeContainer: true,
+          imageTimeout: 0
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+      };
+
+      if (typeof html2pdf === 'undefined') {
+        throw new Error("html2pdf library not loaded from CDN");
+      }
+
+      await html2pdf().from(clone).set(opt).save();
+      document.body.removeChild(clone);
+    } catch (err) {
+      console.error("PDF Export failed:", err);
+      alert("High-Res PDF export failed due to resource limits. This is common for large books in browser environments. Please use the 'Print / Save as PDF' option which is much more reliable.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const exportToPrint = () => {
+    if (!webBook) return;
+    const element = document.querySelector('.web-book-container');
+    if (!element) return;
+
+    // Create a new window for printing to bypass iframe restrictions
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert("Please allow popups to use the print feature.");
+      return;
+    }
+
+    const htmlContent = element.innerHTML;
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${webBook.topic}</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+          <style>
+            body { font-family: 'Inter', sans-serif; background: white; padding: 0; margin: 0; }
+            .font-serif { font-family: 'Playfair Display', serif; }
+            .print\\:hidden { display: none !important; }
+            @media print {
+              body { padding: 0; }
+              .no-print { display: none; }
+              @page { margin: 1.5cm; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="max-w-[850px] mx-auto p-8">
+            ${htmlContent}
+          </div>
+          <script>
+            // Wait for tailwind and fonts
+            window.onload = () => {
+              setTimeout(() => {
+                window.print();
+                // We don't close immediately to allow the user to see the print dialog
+              }, 1000);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   const viewHistoryItem = (item: WebBook) => {
@@ -434,7 +602,13 @@ export default function App() {
                           onClick={() => { exportToPDF(); setShowExportOptions(false); }}
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
                         >
-                          <FileText size={14} className="text-red-600" /> PDF Document
+                          <FileText size={14} className="text-red-600" /> PDF Document (High Res)
+                        </button>
+                        <button 
+                          onClick={() => { exportToPrint(); setShowExportOptions(false); }}
+                          className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
+                        >
+                          <Printer size={14} className="text-green-600" /> Print / Save as PDF (Lightweight)
                         </button>
                         <button 
                           onClick={() => { exportToWord(); setShowExportOptions(false); }}
@@ -528,7 +702,7 @@ export default function App() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Enter search topic..."
                 className="w-full bg-[#F5F5F5] border border-[#141414] p-4 pr-14 focus:outline-none focus:ring-0 text-base sm:text-lg font-mono resize-none overflow-y-auto max-h-32"
-                style={{ height: 'auto', minHeight: '64px' }}
+                style={{ height: 'auto', minHeight: '72px' }}
                 disabled={state.status !== 'idle' && state.status !== 'complete'}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
@@ -735,6 +909,7 @@ export default function App() {
                                 src={`https://picsum.photos/seed/${chapter.visualSeed || chapter.title}/1200/800`}
                                 alt={chapter.title}
                                 referrerPolicy="no-referrer"
+                                crossOrigin="anonymous"
                                 className="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-1000 scale-105 group-hover:scale-100"
                               />
                             </div>
@@ -784,10 +959,20 @@ export default function App() {
                                   <BookOpen size={16} /> Technical Glossary
                                 </h4>
                                 <div className="space-y-8">
-                                  {chapter.definitions
-                                    .filter(def => {
-                                      const term = def.term || "";
+                                  {(() => {
+                                    const seenTerms = new Set();
+                                    return chapter.definitions
+                                      .filter(def => {
+                                        const termKey = (def.term || "").toLowerCase().trim();
+                                        if (seenTerms.has(termKey)) return false;
+                                        seenTerms.add(termKey);
+
+                                        const term = def.term || "";
+                                      const description = def.description || "";
                                       const clean = term.replace(/\s/g, '');
+                                      const lowerText = term.toLowerCase();
+                                      const lowerDesc = description.toLowerCase();
+
                                       // Filter out mostly-digit strings
                                       if (/^\d+$/.test(clean)) return false;
                                       // Filter out long sequences of the same character
@@ -798,8 +983,71 @@ export default function App() {
                                       if (term.length > 40 && !term.includes(' ')) return false;
                                       // Filter out strings that look like random hex/alphanumeric
                                       if (clean.length > 12 && !/[aeiou]/i.test(clean)) return false;
+
+                                      // Detect repetitive substrings within a single word (e.g., "abc-abc-abc")
+                                      const parts = clean.split(/[-_]/);
+                                      if (parts.length > 3) {
+                                        const uniqueParts = new Set(parts);
+                                        if (uniqueParts.size < parts.length / 2) return false;
+                                      }
+                                      
+                                      // Specific check for the reported "TCXGSD-0126" repetitive pattern
+                                      if (clean.includes('TCXGSD') && clean.length > 30) {
+                                        const tcxCount = (clean.match(/TCXGSD/g) || []).length;
+                                        if (tcxCount > 2) return false;
+                                      }
+
+                                      // General check for repetitive patterns like "ABC-123-ABC-123"
+                                      const repetitivePattern = /(.{4,})\1{2,}/;
+                                      if (repetitivePattern.test(clean)) return false;
+
+                                      // Filter out "data-poisoning", boilerplate, or irrelevant legal/security texts
+                                      const poisonKeywords = [
+                                        'copyright', 'rights reserved', 'terms of service', 'privacy policy',
+                                        'unauthorized access', 'cybersecurity', 'protected by', 'cookie policy',
+                                        'scrapping', 'bot detection', 'access denied', 'legal notice', 'disclaimer',
+                                        'all rights', 'terms of use', 'security warning', 'intellectual property',
+                                        'proprietary information', 'confidentiality', 'amen so be it', 'and so it shall be',
+                                         'for all eternity', 'grand design of the universe'
+                                      ];
+                                      if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
+
+                                       // Detect repetitive word patterns (e.g., "and its ... and its ...")
+                                       const wordsList = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
+                                       if (wordsList.length > 30) {
+                                         const uniqueWords = new Set(wordsList);
+                                         const uniqueRatio = uniqueWords.size / wordsList.length;
+                                         // If unique words are less than 35% of total words in a long string, it's likely repetitive noise
+                                         if (uniqueRatio < 0.35) return false;
+                                         
+                                         // Specific check for the reported "and its/our/the/all" pattern
+                                         const andItsCount = (lowerText.match(/and its/g) || []).length + (lowerDesc.match(/and its/g) || []).length;
+                                         const andOurCount = (lowerText.match(/and our/g) || []).length + (lowerDesc.match(/and our/g) || []).length;
+                                         const andTheCount = (lowerText.match(/and the/g) || []).length + (lowerDesc.match(/and the/g) || []).length;
+                                         const andAllCount = (lowerText.match(/and all/g) || []).length + (lowerDesc.match(/and all/g) || []).length;
+                                         if (andItsCount > 4 || andOurCount > 4 || andTheCount > 8 || andAllCount > 4) return false;
+
+                                         // General check for any 2-word phrase repeated more than 3 times
+                                         const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
+                                         for (let i = 0; i < words.length - 1; i++) {
+                                           const phrase = `${words[i]} ${words[i+1]}`;
+                                           if (phrase.length < 5) continue;
+                                           let count = 0;
+                                           for (let j = 0; j < words.length - 1; j++) {
+                                             if (`${words[j]} ${words[j+1]}` === phrase) count++;
+                                           }
+                                           if (count > 3) return false;
+                                         }
+                                       }
+
+                                      // Filter out raw assembly or machine code heuristics
+                                      const assemblyHeuristic = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
+                                      if (assemblyHeuristic.test(term) || assemblyHeuristic.test(description)) return false;
+                                      if (/[0-9a-f]{2,}\s[0-9a-f]{2,}\s[0-9a-f]{2,}/i.test(term)) return false;
+
                                       return true;
-                                    })
+                                    });
+                                  })()
                                     .map((def, j) => {
                                       const words = (def.description || "").split(/\s+/);
                                       const isLong = words.length > 100;
