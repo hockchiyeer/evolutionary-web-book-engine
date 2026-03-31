@@ -935,120 +935,125 @@ export default function App() {
 
                         {/* Chapter Page 2: Analysis & Glossary */}
                         <section className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
-                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 flex-1">
-                            <div className="lg:col-span-7 space-y-12">
-                              <div className="space-y-8">
-                                <h4 className="text-[12px] uppercase font-bold tracking-[0.2em] flex items-center gap-3 text-[#141414]/60 border-b border-[#141414]/10 pb-4">
-                                  <Layers size={16} /> Deep Analysis & Sub-Topics
-                                </h4>
-                                <div className="space-y-10">
-                                  {chapter.subTopics.map((sub, j) => (
+                          <div className="flex-1 space-y-12">
+                            <div className="space-y-8">
+                              <h4 className="text-[12px] uppercase font-bold tracking-[0.2em] flex items-center gap-3 text-[#141414]/60 border-b border-[#141414]/10 pb-4">
+                                <Layers size={16} /> Deep Analysis & Sub-Topics
+                              </h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                                {chapter.subTopics.map((sub, j) => (
                                     <div key={j} className="relative pl-8 group">
                                       <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#141414]/10 group-hover:bg-[#141414] transition-colors" />
                                       <h5 className="font-bold text-xl mb-3">{sub.title}</h5>
                                       <p className="text-base text-gray-600 leading-relaxed font-light">{sub.summary}</p>
                                     </div>
                                   ))}
-                                </div>
                               </div>
                             </div>
 
-                            <div className="lg:col-span-5">
-                              <div className="bg-[#141414] text-white p-10 shadow-xl h-full">
-                                <h4 className="text-[10px] uppercase font-bold tracking-[0.3em] mb-10 flex items-center gap-3 opacity-70 border-b border-white/10 pb-6">
-                                  <BookOpen size={16} /> Technical Glossary
-                                </h4>
-                                <div className="space-y-8">
-                                  {(() => {
-                                    const seenTerms = new Set();
-                                    return chapter.definitions
-                                      .filter(def => {
-                                        const termKey = (def.term || "").toLowerCase().trim();
-                                        if (seenTerms.has(termKey)) return false;
-                                        seenTerms.add(termKey);
+                            {/* Technical Glossary Section - Now Horizontal */}
+                            {(() => {
+                              const seenTerms = new Set();
+                              const filteredDefs = (chapter.definitions || [])
+                                .filter(def => {
+                                  const termKey = (def.term || "").toLowerCase().trim();
+                                  if (seenTerms.has(termKey)) return false;
+                                  seenTerms.add(termKey);
 
-                                        const term = def.term || "";
-                                      const description = def.description || "";
-                                      const clean = term.replace(/\s/g, '');
-                                      const lowerText = term.toLowerCase();
-                                      const lowerDesc = description.toLowerCase();
+                                  const term = def.term || "";
+                                  const description = def.description || "";
+                                  const clean = term.replace(/\s/g, '');
+                                  const lowerText = term.toLowerCase();
+                                  const lowerDesc = description.toLowerCase();
 
-                                      // Filter out mostly-digit strings
-                                      if (/^\d+$/.test(clean)) return false;
-                                      // Filter out long sequences of the same character
-                                      if (/(.)\1{8,}/.test(clean)) return false;
-                                      // Filter out strings with too many digits
-                                      if (/\d{10,}/.test(clean)) return false;
-                                      // Filter out very long strings without spaces
-                                      if (term.length > 40 && !term.includes(' ')) return false;
-                                      // Filter out strings that look like random hex/alphanumeric
-                                      if (clean.length > 12 && !/[aeiou]/i.test(clean)) return false;
+                                  // Limit length: any glossary item longer than one-third of a page (~1000 chars) should be excluded
+                                  if (description.length > 1000) return false;
 
-                                      // Detect repetitive substrings within a single word (e.g., "abc-abc-abc")
-                                      const parts = clean.split(/[-_]/);
-                                      if (parts.length > 3) {
-                                        const uniqueParts = new Set(parts);
-                                        if (uniqueParts.size < parts.length / 2) return false;
-                                      }
-                                      
-                                      // Specific check for the reported "TCXGSD-0126" repetitive pattern
-                                      if (clean.includes('TCXGSD') && clean.length > 30) {
-                                        const tcxCount = (clean.match(/TCXGSD/g) || []).length;
-                                        if (tcxCount > 2) return false;
-                                      }
+                                  // Filter out mostly-digit strings
+                                  if (/^\d+$/.test(clean)) return false;
+                                  // Filter out long sequences of the same character
+                                  if (/(.)\1{8,}/.test(clean)) return false;
+                                  // Filter out strings with too many digits
+                                  if (/\d{10,}/.test(clean)) return false;
+                                  // Filter out very long strings without spaces
+                                  if (term.length > 40 && !term.includes(' ')) return false;
+                                  // Filter out strings that look like random hex/alphanumeric
+                                  if (clean.length > 12 && !/[aeiou]/i.test(clean)) return false;
 
-                                      // General check for repetitive patterns like "ABC-123-ABC-123"
-                                      const repetitivePattern = /(.{4,})\1{2,}/;
-                                      if (repetitivePattern.test(clean)) return false;
+                                  // Detect repetitive substrings within a single word (e.g., "abc-abc-abc")
+                                  const parts = clean.split(/[-_]/);
+                                  if (parts.length > 3) {
+                                    const uniqueParts = new Set(parts);
+                                    if (uniqueParts.size < parts.length / 2) return false;
+                                  }
+                                  
+                                  // Specific check for the reported "TCXGSD-0126" repetitive pattern
+                                  if (clean.includes('TCXGSD') && clean.length > 30) {
+                                    const tcxCount = (clean.match(/TCXGSD/g) || []).length;
+                                    if (tcxCount > 2) return false;
+                                  }
 
-                                      // Filter out "data-poisoning", boilerplate, or irrelevant legal/security texts
-                                      const poisonKeywords = [
-                                        'copyright', 'rights reserved', 'terms of service', 'privacy policy',
-                                        'unauthorized access', 'cybersecurity', 'protected by', 'cookie policy',
-                                        'scrapping', 'bot detection', 'access denied', 'legal notice', 'disclaimer',
-                                        'all rights', 'terms of use', 'security warning', 'intellectual property',
-                                        'proprietary information', 'confidentiality', 'amen so be it', 'and so it shall be',
-                                         'for all eternity', 'grand design of the universe'
-                                      ];
-                                      if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
+                                  // General check for repetitive patterns like "ABC-123-ABC-123"
+                                  const repetitivePattern = /(.{4,})\1{2,}/;
+                                  if (repetitivePattern.test(clean)) return false;
 
-                                       // Detect repetitive word patterns (e.g., "and its ... and its ...")
-                                       const wordsList = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
-                                       if (wordsList.length > 30) {
-                                         const uniqueWords = new Set(wordsList);
-                                         const uniqueRatio = uniqueWords.size / wordsList.length;
-                                         // If unique words are less than 35% of total words in a long string, it's likely repetitive noise
-                                         if (uniqueRatio < 0.35) return false;
-                                         
-                                         // Specific check for the reported "and its/our/the/all" pattern
-                                         const andItsCount = (lowerText.match(/and its/g) || []).length + (lowerDesc.match(/and its/g) || []).length;
-                                         const andOurCount = (lowerText.match(/and our/g) || []).length + (lowerDesc.match(/and our/g) || []).length;
-                                         const andTheCount = (lowerText.match(/and the/g) || []).length + (lowerDesc.match(/and the/g) || []).length;
-                                         const andAllCount = (lowerText.match(/and all/g) || []).length + (lowerDesc.match(/and all/g) || []).length;
-                                         if (andItsCount > 4 || andOurCount > 4 || andTheCount > 8 || andAllCount > 4) return false;
+                                  // Filter out "data-poisoning", boilerplate, or irrelevant legal/security texts
+                                  const poisonKeywords = [
+                                    'copyright', 'rights reserved', 'terms of service', 'privacy policy',
+                                    'unauthorized access', 'cybersecurity', 'protected by', 'cookie policy',
+                                    'scrapping', 'bot detection', 'access denied', 'legal notice', 'disclaimer',
+                                    'all rights', 'terms of use', 'security warning', 'intellectual property',
+                                    'proprietary information', 'confidentiality', 'amen so be it', 'and so it shall be',
+                                    'for all eternity', 'grand design of the universe'
+                                  ];
+                                  if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
 
-                                         // General check for any 2-word phrase repeated more than 3 times
-                                         const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
-                                         for (let i = 0; i < words.length - 1; i++) {
-                                           const phrase = `${words[i]} ${words[i+1]}`;
-                                           if (phrase.length < 5) continue;
-                                           let count = 0;
-                                           for (let j = 0; j < words.length - 1; j++) {
-                                             if (`${words[j]} ${words[j+1]}` === phrase) count++;
-                                           }
-                                           if (count > 3) return false;
-                                         }
+                                   // Detect repetitive word patterns (e.g., "and its ... and its ...")
+                                   const wordsList = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
+                                   if (wordsList.length > 30) {
+                                     const uniqueWords = new Set(wordsList);
+                                     const uniqueRatio = uniqueWords.size / wordsList.length;
+                                     // If unique words are less than 35% of total words in a long string, it's likely repetitive noise
+                                     if (uniqueRatio < 0.35) return false;
+                                     
+                                     // Specific check for the reported "and its/our/the/all" pattern
+                                     const andItsCount = (lowerText.match(/and its/g) || []).length + (lowerDesc.match(/and its/g) || []).length;
+                                     const andOurCount = (lowerText.match(/and our/g) || []).length + (lowerDesc.match(/and our/g) || []).length;
+                                     const andTheCount = (lowerText.match(/and the/g) || []).length + (lowerDesc.match(/and the/g) || []).length;
+                                     const andAllCount = (lowerText.match(/and all/g) || []).length + (lowerDesc.match(/and all/g) || []).length;
+                                     if (andItsCount > 4 || andOurCount > 4 || andTheCount > 8 || andAllCount > 4) return false;
+
+                                     // General check for any 2-word phrase repeated more than 3 times
+                                     const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
+                                     for (let i = 0; i < words.length - 1; i++) {
+                                       const phrase = `${words[i]} ${words[i+1]}`;
+                                       if (phrase.length < 5) continue;
+                                       let count = 0;
+                                       for (let j = 0; j < words.length - 1; j++) {
+                                         if (`${words[j]} ${words[j+1]}` === phrase) count++;
                                        }
+                                       if (count > 3) return false;
+                                     }
+                                   }
 
-                                      // Filter out raw assembly or machine code heuristics
-                                      const assemblyHeuristic = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
-                                      if (assemblyHeuristic.test(term) || assemblyHeuristic.test(description)) return false;
-                                      if (/[0-9a-f]{2,}\s[0-9a-f]{2,}\s[0-9a-f]{2,}/i.test(term)) return false;
+                                  // Filter out raw assembly or machine code heuristics
+                                  const assemblyHeuristic = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
+                                  if (assemblyHeuristic.test(term) || assemblyHeuristic.test(description)) return false;
+                                  if (/[0-9a-f]{2,}\s[0-9a-f]{2,}\s[0-9a-f]{2,}/i.test(term)) return false;
 
-                                      return true;
-                                    });
-                                  })()
-                                    .map((def, j) => {
+                                  return true;
+                                })
+                                .slice(0, 6);
+
+                              if (filteredDefs.length === 0) return null;
+
+                              return (
+                                <div className="bg-[#141414] text-white p-10 shadow-xl">
+                                  <h4 className="text-[10px] uppercase font-bold tracking-[0.3em] mb-10 flex items-center gap-3 opacity-70 border-b border-white/10 pb-6">
+                                    <BookOpen size={16} /> Technical Glossary
+                                  </h4>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-10">
+                                    {filteredDefs.map((def, j) => {
                                       const words = (def.description || "").split(/\s+/);
                                       const isLong = words.length > 100;
                                       const displayDescription = isLong 
@@ -1081,7 +1086,7 @@ export default function App() {
                                     })}
                                   </div>
                                   
-                                  <div className="mt-20 pt-10 border-t border-white/10">
+                                  <div className="mt-10 pt-6 border-t border-white/10">
                                     <div className="flex items-center gap-3 text-[9px] font-bold uppercase opacity-40 break-all">
                                       <div className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse shrink-0" />
                                       Source Verification:{" "}
@@ -1099,8 +1104,9 @@ export default function App() {
                                       )}
                                     </div>
                                   </div>
-                              </div>
-                            </div>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           <div className="mt-auto pt-12 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40">

@@ -394,6 +394,9 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       ];
       if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
 
+      // Limit length: any glossary item longer than one-third of a page (~1000 chars) should be excluded
+      if (lowerDesc.length > 1000) return false;
+
       // Detect repetitive word patterns (e.g., "and its ... and its ...")
       const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
       if (words.length > 30) {
