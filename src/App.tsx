@@ -9,7 +9,7 @@ import React, { useState, useEffect, useRef } from 'react';
 // It is loaded via CDN in index.html to avoid module resolution issues
 declare const html2pdf: any;
 import { motion, AnimatePresence } from 'motion/react';
-import { 
+import {
   Search, 
   BookOpen, 
   Dna, 
@@ -34,6 +34,7 @@ import {
   Printer
 } from 'lucide-react';
 import { WebBook, WebPageGenotype, EvolutionState } from './types';
+import { buildChapterRenderPlan } from './utils/webBookRender';
 
 export default function App() {
   const [query, setQuery] = useState('');
@@ -526,6 +527,8 @@ export default function App() {
     setShowHistory(false);
   };
 
+  const chapterRenderPlan = webBook ? buildChapterRenderPlan(webBook.chapters) : [];
+
   return (
     <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
       {/* Header */}
@@ -875,12 +878,12 @@ export default function App() {
                   <div className="p-20 border-b border-[#141414] bg-[#FAFAFA] min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always relative">
                     <h3 className="text-[14px] uppercase font-bold mb-16 tracking-[0.3em] border-b-2 border-[#141414] pb-6 inline-block self-start">Table of Contents</h3>
                     <div className="space-y-8 flex-1">
-                      {webBook.chapters.map((chapter, i) => (
+                      {chapterRenderPlan.map(({ chapter, titlePageNumber }, i) => (
                         <a key={i} href={`#chapter-${i}`} className="flex items-end gap-6 group">
                           <span className="font-mono text-base opacity-40">0{i+1}</span>
                           <span className="text-xl font-medium group-hover:underline underline-offset-8 decoration-1">{chapter.title}</span>
                           <div className="flex-1 border-b border-dotted border-[#141414] opacity-20 mb-2" />
-                          <span className="font-mono text-base opacity-40">P.{i * 2 + 2}</span>
+                          <span className="font-mono text-base opacity-40">P.{titlePageNumber}</span>
                         </a>
                       ))}
                     </div>
@@ -891,7 +894,7 @@ export default function App() {
 
                   {/* Chapters - Paginated Experience */}
                   <div className="bg-[#F0F0F0] p-8 space-y-12">
-                    {webBook.chapters.map((chapter, i) => (
+                    {chapterRenderPlan.map(({ chapter, titlePageNumber, analysisPageNumber, renderableDefinitions, renderableSubTopics }, i) => (
                       <div key={i} className="space-y-12">
                         {/* Chapter Page 1: Title & Image */}
                         <section id={`chapter-${i}`} className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
@@ -900,7 +903,7 @@ export default function App() {
                               <span className="w-10 h-10 bg-[#141414] text-white flex items-center justify-center font-mono text-sm">0{i+1}</span>
                               <h3 className="text-4xl font-serif italic font-bold tracking-tight">{chapter.title}</h3>
                             </div>
-                            <div className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Chapter {i+1} / {webBook.chapters.length}</div>
+                            <div className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Chapter {i+1} / {chapterRenderPlan.length}</div>
                           </div>
 
                           <div className="mb-12 relative group">
@@ -929,131 +932,38 @@ export default function App() {
 
                           <div className="mt-auto pt-12 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40">
                             <span>{webBook.topic}</span>
-                            <span>PAGE {i * 2 + 2}</span>
+                            <span>PAGE {titlePageNumber}</span>
                           </div>
                         </section>
 
                         {/* Chapter Page 2: Analysis & Glossary */}
-                        <section className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
-                          <div className="flex-1 space-y-12">
-                            <div className="space-y-8">
-                              <h4 className="text-[12px] uppercase font-bold tracking-[0.2em] flex items-center gap-3 text-[#141414]/60 border-b border-[#141414]/10 pb-4">
-                                <Layers size={16} /> Deep Analysis & Sub-Topics
-                              </h4>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                                {chapter.subTopics.map((sub, j) => (
-                                    <div key={j} className="relative pl-8 group">
-                                      <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#141414]/10 group-hover:bg-[#141414] transition-colors" />
-                                      <h5 className="font-bold text-xl mb-3">{sub.title}</h5>
-                                      <p className="text-base text-gray-600 leading-relaxed font-light">{sub.summary}</p>
-                                    </div>
-                                  ))}
-                              </div>
-                            </div>
+                        {analysisPageNumber !== null && (
+                          <section className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
+                            <div className="flex-1 space-y-12">
+                              {renderableSubTopics.length > 0 && (
+                                <div className="space-y-8">
+                                  <h4 className="text-[12px] uppercase font-bold tracking-[0.2em] flex items-center gap-3 text-[#141414]/60 border-b border-[#141414]/10 pb-4">
+                                    <Layers size={16} /> Deep Analysis & Sub-Topics
+                                  </h4>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                                    {renderableSubTopics.map((sub, j) => (
+                                      <div key={j} className="relative pl-8 group">
+                                        <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-[#141414]/10 group-hover:bg-[#141414] transition-colors" />
+                                        <h5 className="font-bold text-xl mb-3">{sub.title}</h5>
+                                        <p className="text-base text-gray-600 leading-relaxed font-light">{sub.summary}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
 
-                            {/* Technical Glossary Section - Now Horizontal */}
-                            {(() => {
-                              const seenTerms = new Set();
-                              const filteredDefs = (chapter.definitions || [])
-                                .filter(def => {
-                                  const termKey = (def.term || "").toLowerCase().trim();
-                                  if (seenTerms.has(termKey)) return false;
-                                  seenTerms.add(termKey);
-
-                                  const term = def.term || "";
-                                  const description = def.description || "";
-                                  const clean = term.replace(/\s/g, '');
-                                  const lowerText = term.toLowerCase();
-                                  const lowerDesc = description.toLowerCase();
-
-                                  // Limit length: any glossary item longer than one-third of a page (~1000 chars) should be excluded
-                                  if (description.length > 1000) return false;
-
-                                  // Filter out mostly-digit strings
-                                  if (/^\d+$/.test(clean)) return false;
-                                  // Filter out long sequences of the same character
-                                  if (/(.)\1{8,}/.test(clean)) return false;
-                                  // Filter out strings with too many digits
-                                  if (/\d{10,}/.test(clean)) return false;
-                                  // Filter out very long strings without spaces
-                                  if (term.length > 40 && !term.includes(' ')) return false;
-                                  // Filter out strings that look like random hex/alphanumeric
-                                  if (clean.length > 12 && !/[aeiou]/i.test(clean)) return false;
-
-                                  // Detect repetitive substrings within a single word (e.g., "abc-abc-abc")
-                                  const parts = clean.split(/[-_]/);
-                                  if (parts.length > 3) {
-                                    const uniqueParts = new Set(parts);
-                                    if (uniqueParts.size < parts.length / 2) return false;
-                                  }
-                                  
-                                  // Specific check for the reported "TCXGSD-0126" repetitive pattern
-                                  if (clean.includes('TCXGSD') && clean.length > 30) {
-                                    const tcxCount = (clean.match(/TCXGSD/g) || []).length;
-                                    if (tcxCount > 2) return false;
-                                  }
-
-                                  // General check for repetitive patterns like "ABC-123-ABC-123"
-                                  const repetitivePattern = /(.{4,})\1{2,}/;
-                                  if (repetitivePattern.test(clean)) return false;
-
-                                  // Filter out "data-poisoning", boilerplate, or irrelevant legal/security texts
-                                  const poisonKeywords = [
-                                    'copyright', 'rights reserved', 'terms of service', 'privacy policy',
-                                    'unauthorized access', 'cybersecurity', 'protected by', 'cookie policy',
-                                    'scrapping', 'bot detection', 'access denied', 'legal notice', 'disclaimer',
-                                    'all rights', 'terms of use', 'security warning', 'intellectual property',
-                                    'proprietary information', 'confidentiality', 'amen so be it', 'and so it shall be',
-                                    'for all eternity', 'grand design of the universe'
-                                  ];
-                                  if (poisonKeywords.some(word => lowerText.includes(word) || lowerDesc.includes(word))) return false;
-
-                                   // Detect repetitive word patterns (e.g., "and its ... and its ...")
-                                   const wordsList = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
-                                   if (wordsList.length > 30) {
-                                     const uniqueWords = new Set(wordsList);
-                                     const uniqueRatio = uniqueWords.size / wordsList.length;
-                                     // If unique words are less than 35% of total words in a long string, it's likely repetitive noise
-                                     if (uniqueRatio < 0.35) return false;
-                                     
-                                     // Specific check for the reported "and its/our/the/all" pattern
-                                     const andItsCount = (lowerText.match(/and its/g) || []).length + (lowerDesc.match(/and its/g) || []).length;
-                                     const andOurCount = (lowerText.match(/and our/g) || []).length + (lowerDesc.match(/and our/g) || []).length;
-                                     const andTheCount = (lowerText.match(/and the/g) || []).length + (lowerDesc.match(/and the/g) || []).length;
-                                     const andAllCount = (lowerText.match(/and all/g) || []).length + (lowerDesc.match(/and all/g) || []).length;
-                                     if (andItsCount > 4 || andOurCount > 4 || andTheCount > 8 || andAllCount > 4) return false;
-
-                                     // General check for any 2-word phrase repeated more than 3 times
-                                     const words = lowerText.split(/\s+/).concat(lowerDesc.split(/\s+/)).filter(w => w.length > 0);
-                                     for (let i = 0; i < words.length - 1; i++) {
-                                       const phrase = `${words[i]} ${words[i+1]}`;
-                                       if (phrase.length < 5) continue;
-                                       let count = 0;
-                                       for (let j = 0; j < words.length - 1; j++) {
-                                         if (`${words[j]} ${words[j+1]}` === phrase) count++;
-                                       }
-                                       if (count > 3) return false;
-                                     }
-                                   }
-
-                                  // Filter out raw assembly or machine code heuristics
-                                  const assemblyHeuristic = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
-                                  if (assemblyHeuristic.test(term) || assemblyHeuristic.test(description)) return false;
-                                  if (/[0-9a-f]{2,}\s[0-9a-f]{2,}\s[0-9a-f]{2,}/i.test(term)) return false;
-
-                                  return true;
-                                })
-                                .slice(0, 6);
-
-                              if (filteredDefs.length === 0) return null;
-
-                              return (
+                              {renderableDefinitions.length > 0 && (
                                 <div className="bg-[#141414] text-white p-10 shadow-xl">
                                   <h4 className="text-[10px] uppercase font-bold tracking-[0.3em] mb-10 flex items-center gap-3 opacity-70 border-b border-white/10 pb-6">
                                     <BookOpen size={16} /> Technical Glossary
                                   </h4>
                                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-10">
-                                    {filteredDefs.map((def, j) => {
+                                    {renderableDefinitions.map((def, j) => {
                                       const words = (def.description || "").split(/\s+/);
                                       const isLong = words.length > 100;
                                       const displayDescription = isLong 
@@ -1105,15 +1015,15 @@ export default function App() {
                                     </div>
                                   </div>
                                 </div>
-                              );
-                            })()}
-                          </div>
+                              )}
+                            </div>
 
-                          <div className="mt-auto pt-12 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40">
-                            <span>Evolutionary Node {i+1}.{chapter.visualSeed?.length || 0}</span>
-                            <span>PAGE {i * 2 + 3}</span>
-                          </div>
-                        </section>
+                            <div className="mt-auto pt-12 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40">
+                              <span>Evolutionary Node {i+1}.{chapter.visualSeed?.length || 0}</span>
+                              <span>PAGE {analysisPageNumber}</span>
+                            </div>
+                          </section>
+                        )}
                       </div>
                     ))}
                   </div>

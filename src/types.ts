@@ -27,7 +27,7 @@ export interface Chapter {
   content: string;
   definitions: Definition[];
   subTopics: SubTopic[];
-  sourceUrls: string[];
+  sourceUrls: Array<string | { title: string; url: string }>;
   visualSeed: string; // Keyword for image generation
 }
 
