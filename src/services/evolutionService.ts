@@ -71,7 +71,7 @@ function repairTruncatedJSON(jsonString: string): string {
   return repaired;
 }
 
-export async function searchAndExtract(query: string): Promise<WebPageGenotype[]> {
+export async function searchAndExtract(query: string): Promise<{ results: WebPageGenotype[], artifacts: any }> {
   const ai = getAI();
   const model = "gemini-3-flash-preview";
   
@@ -131,7 +131,9 @@ export async function searchAndExtract(query: string): Promise<WebPageGenotype[]
 
   let results;
   const rawText = (response.text || "").trim();
-  if (!rawText) return [];
+  const artifacts = response.candidates?.[0]?.groundingMetadata;
+
+  if (!rawText) return { results: [], artifacts };
   try {
     results = JSON.parse(rawText);
   } catch (e) {
@@ -145,10 +147,10 @@ export async function searchAndExtract(query: string): Promise<WebPageGenotype[]
   
   if (!Array.isArray(results)) {
     console.error("Search results is not an array:", results);
-    return [];
+    return { results: [], artifacts };
   }
   
-  return results.map((r: any, index: number) => ({
+  const processedResults = results.map((r: any, index: number) => ({
     ...r,
     id: `gen-${index}-${Date.now()}`,
     content: r.content ? r.content.substring(0, 2000) : "", 
@@ -156,6 +158,8 @@ export async function searchAndExtract(query: string): Promise<WebPageGenotype[]
     subTopics: (r.subTopics || []).map((s: any) => ({ ...s, sourceUrl: r.url })),
     fitness: 0 
   }));
+
+  return { results: processedResults, artifacts };
 }
 
 export function calculateFitness(
@@ -350,8 +354,9 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       chapterData = JSON.parse(repairTruncatedJSON(chapterResponse.text));
     }
 
-    const content = chapterData?.content || "Content generation failed.";
-    const isContentMeaningful = isMeaningfulText(content);
+    const content = chapterData?.content;
+    if (!content || !isMeaningfulText(content)) return null;
+
     const filteredDefinitions = getRenderableDefinitions(chapterData?.definitions || [])
       .map((d: any) => ({ ...d, sourceUrl: truncatedData[0]?.url || "Synthesized" }));
     const filteredSubTopics = getRenderableSubTopics(chapterData?.subTopics || [])
@@ -359,7 +364,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
 
     return {
       title: chapterOutline.title,
-      content: isContentMeaningful ? content : "Content generation failed due to quality checks. The generated content was detected as repetitive or meaningless. Please try again.",
+      content,
       definitions: filteredDefinitions,
       subTopics: filteredSubTopics,
       sourceUrls: truncatedData.map(d => ({ title: d.title, url: d.url })),
@@ -367,7 +372,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
     };
   });
 
-  const chapters = await Promise.all(chapterPromises);
+  const chapters = (await Promise.all(chapterPromises)).filter((c): c is any => c !== null);
 
   return {
     topic: outlineData.topic,

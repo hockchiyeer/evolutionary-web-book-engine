@@ -43,6 +43,12 @@ export interface EvolutionState {
   population: WebPageGenotype[];
   bestFitness: number;
   status: 'idle' | 'searching' | 'parsing' | 'evolving' | 'assembling' | 'complete';
+  artifacts?: {
+    rawSearchResults?: any[];
+    evolvedPopulation?: WebPageGenotype[];
+    assemblyInput?: any;
+    assemblyOutput?: any;
+  };
 }
 
 declare global {

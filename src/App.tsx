@@ -305,18 +305,23 @@ export default function App() {
     generation: 0,
     population: [],
     bestFitness: 0,
-    status: 'idle'
+    status: 'idle',
+    artifacts: {}
   });
   const [webBook, setWebBook] = useState<WebBook | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<WebBook[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showArtifacts, setShowArtifacts] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const artifactsRef = useRef<HTMLElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [isHoveringInput, setIsHoveringInput] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState<'top' | 'bottom'>('top');
 
   // Close export options when clicking outside
   useEffect(() => {
@@ -328,6 +333,31 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Auto-scroll to artifacts when expanded
+  useEffect(() => {
+    if (showArtifacts && artifactsRef.current) {
+      // Small delay to allow the motion section to start expanding
+      const timer = setTimeout(() => {
+        artifactsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [showArtifacts]);
+
+  // Handle tooltip positioning
+  useEffect(() => {
+    if (isHoveringInput && formRef.current) {
+      const rect = formRef.current.getBoundingClientRect();
+      const spaceAbove = rect.top;
+      // If less than 320px above, flip to bottom to avoid header/top overflow
+      if (spaceAbove < 320) {
+        setTooltipPosition('bottom');
+      } else {
+        setTooltipPosition('top');
+      }
+    }
+  }, [isHoveringInput, query]);
 
   // Load history from localStorage
   useEffect(() => {
@@ -396,7 +426,7 @@ export default function App() {
     const trimmedQuery = query.trim();
     if (!trimmedQuery) return;
 
-    setState({ ...state, status: 'searching', generation: 0, population: [] });
+    setState({ ...state, status: 'searching', generation: 0, population: [], artifacts: {} });
     setWebBook(null);
     setError(null);
 
@@ -412,14 +442,30 @@ export default function App() {
       const { searchAndExtract, evolve, assembleWebBook } = await import('./services/evolutionService');
       
       // 1. Targeted Crawling & Ingestion
-      const initialPopulation = await searchAndExtract(trimmedQuery);
+      const { results: initialPopulation, artifacts: searchArtifacts } = await searchAndExtract(trimmedQuery);
+      setState(s => ({ 
+        ...s, 
+        status: 'evolving', 
+        population: initialPopulation,
+        artifacts: {
+          ...s.artifacts,
+          rawSearchResults: searchArtifacts?.groundingChunks || []
+        }
+      }));
       
       // 2. Evolutionary Processing Engine
-      setState(s => ({ ...s, status: 'evolving', population: initialPopulation }));
       const evolvedPopulation = await evolve(initialPopulation);
+      setState(s => ({ 
+        ...s, 
+        status: 'assembling', 
+        population: evolvedPopulation,
+        artifacts: {
+          ...s.artifacts,
+          evolvedPopulation: evolvedPopulation
+        }
+      }));
       
       // 3. Web-Book Assembly
-      setState(s => ({ ...s, status: 'assembling', population: evolvedPopulation }));
       const assembledBook = await assembleWebBook(evolvedPopulation, trimmedQuery);
       const book = persistedSearchId
         ? { ...assembledBook, id: persistedSearchId }
@@ -430,12 +476,18 @@ export default function App() {
       void completePersistedSearch(persistedSearchId, trimmedQuery, book).catch((persistenceError) => {
         console.error("Failed to persist completed WebBook", persistenceError);
       });
-      setState({
+      setState(s => ({
+        ...s,
         status: 'complete',
         generation: 3,
         population: evolvedPopulation,
-        bestFitness: Math.max(...evolvedPopulation.map((p: any) => p.fitness || 0))
-      });
+        bestFitness: Math.max(...evolvedPopulation.map((p: any) => p.fitness || 0)),
+        artifacts: {
+          ...s.artifacts,
+          assemblyInput: evolvedPopulation.slice(0, 4), // What was sent to assembly
+          assemblyOutput: book
+        }
+      }));
     } catch (err: any) {
       console.error("Evolution error:", err);
       let message = err.message || "An unexpected error occurred during evolution.";
@@ -474,7 +526,8 @@ export default function App() {
       generation: 0,
       population: [],
       bestFitness: 0,
-      status: 'idle'
+      status: 'idle',
+      artifacts: {}
     });
     if (textareaRef.current) {
       textareaRef.current.focus();
@@ -689,22 +742,23 @@ export default function App() {
       // Remove heavy elements
       clone.querySelectorAll('button, .print\\:hidden, [data-html2canvas-ignore]').forEach(el => el.remove());
       
-      // Simplify styles
-      clone.style.width = '800px'; 
+      // Simplify styles for PDF rendering
+      clone.style.width = '850px'; // Standard A4 width-ish
       clone.style.background = 'white';
       clone.style.boxShadow = 'none';
       clone.style.margin = '0';
-      clone.style.position = 'absolute';
+      clone.style.position = 'fixed';
       clone.style.left = '-9999px';
       clone.style.top = '0';
+      clone.style.zIndex = '-1000';
       document.body.appendChild(clone);
       
-      // Fast image processing - only convert if necessary and use lower quality
-      const images = clone.querySelectorAll('img');
-      for (const img of Array.from(images)) {
+      // Parallel image processing for speed
+      const images = Array.from(clone.querySelectorAll('img'));
+      await Promise.all(images.map(async (img) => {
         try {
-          // Skip if already base64
-          if (img.src.startsWith('data:')) continue;
+          // Skip if already base64 or hidden
+          if (img.src.startsWith('data:') || img.style.display === 'none') return;
           
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
@@ -712,14 +766,14 @@ export default function App() {
           tempImg.crossOrigin = 'anonymous';
           
           await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error("Image load timeout")), 3000);
+            const timeout = setTimeout(() => reject(new Error("Image load timeout")), 5000);
             tempImg.onload = () => { clearTimeout(timeout); resolve(null); };
             tempImg.onerror = () => { clearTimeout(timeout); reject(new Error("Image load error")); };
             tempImg.src = img.src;
           });
 
-          // Downscale for PDF to save memory
-          const maxDim = 1200;
+          // Downscale for PDF to save memory and prevent hanging
+          const maxDim = 800; // Smaller for better performance
           let w = tempImg.width;
           let h = tempImg.height;
           if (w > maxDim || h > maxDim) {
@@ -730,30 +784,29 @@ export default function App() {
           canvas.width = w;
           canvas.height = h;
           ctx?.drawImage(tempImg, 0, 0, w, h);
-          img.src = canvas.toDataURL('image/jpeg', 0.6); // Lower quality for speed/memory
+          img.src = canvas.toDataURL('image/jpeg', 0.5); // Lower quality for speed/memory
           
           img.style.filter = 'none';
           img.style.boxShadow = 'none';
           img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
         } catch (e) {
           console.warn("Skipping image in PDF export:", e);
-          // If image fails, we just leave it or remove it to prevent freeze
           img.style.display = 'none';
         }
-      }
+      }));
 
       const opt: any = {
         margin: [10, 10] as [number, number],
         filename: `${webBook.topic.replace(/\s+/g, '_')}.pdf`,
-        image: { type: 'jpeg', quality: 0.8 },
+        image: { type: 'jpeg', quality: 0.7 },
         html2canvas: { 
           scale: 1, 
-          useCORS: false, 
+          useCORS: true, 
           logging: false,
-          letterRendering: true,
-          allowTaint: true,
+          letterRendering: false, // Faster
+          allowTaint: false,
           removeContainer: true,
-          imageTimeout: 0
+          imageTimeout: 15000
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
         pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
@@ -763,6 +816,9 @@ export default function App() {
         throw new Error("html2pdf library not loaded from CDN");
       }
 
+      // Use a small delay before starting PDF generation to ensure DOM is ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       await html2pdf().from(clone).set(opt).save();
       document.body.removeChild(clone);
     } catch (err) {
@@ -865,7 +921,7 @@ export default function App() {
                     key={i} 
                     href={`#chapter-${i}`}
                     className="w-7 h-7 flex items-center justify-center font-mono text-[10px] border border-[#141414]/10 hover:bg-[#141414] hover:text-white transition-all"
-                    title={`Chapter ${i+1}`}
+                    title={`Jump to Chapter ${i+1}: ${webBook.chapters[i].title}`}
                   >
                     {i+1}
                   </a>
@@ -879,6 +935,7 @@ export default function App() {
               <div className="flex items-center gap-2 md:gap-3 border-r border-[#141414]/10 pr-2 md:pr-4 mr-2 md:mr-4">
                 <button 
                   onClick={startNewSearch}
+                  title="Clear current book and start a new evolutionary search"
                   className="px-3 md:px-4 py-2 border border-[#141414] text-[9px] md:text-[10px] uppercase font-bold tracking-widest hover:bg-[#141414] hover:text-white transition-all active:scale-95"
                 >
                   New Search
@@ -890,6 +947,7 @@ export default function App() {
                     aria-expanded={showExportOptions}
                     aria-haspopup="true"
                     disabled={isExporting}
+                    title="Download or print this Web-book in various formats"
                     className="px-3 md:px-4 py-2 bg-[#141414] text-[#E4E3E0] text-[9px] md:text-[10px] uppercase font-bold tracking-widest hover:bg-opacity-90 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isExporting ? (
@@ -911,30 +969,35 @@ export default function App() {
                       >
                         <button 
                           onClick={() => { exportToPDF(); setShowExportOptions(false); }}
+                          title="Generate a high-quality PDF with images and styling"
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
                         >
                           <FileText size={14} className="text-red-600" /> PDF Document (High Res)
                         </button>
                         <button 
                           onClick={() => { exportToPrint(); setShowExportOptions(false); }}
+                          title="Open system print dialog (recommended for large books)"
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
                         >
                           <Printer size={14} className="text-green-600" /> Print / Save as PDF (Lightweight)
                         </button>
                         <button 
                           onClick={() => { exportToWord(); setShowExportOptions(false); }}
+                          title="Export as Microsoft Word document for editing"
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
                         >
                           <FileText size={14} className="text-blue-600" /> Word (.doc)
                         </button>
                         <button 
                           onClick={() => { exportToHTML(); setShowExportOptions(false); }}
+                          title="Download as a standalone HTML file"
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3 border-b border-[#141414]/10"
                         >
                           <FileCode size={14} className="text-orange-600" /> HTML Webpage
                         </button>
                         <button 
                           onClick={() => { exportToTXT(); setShowExportOptions(false); }}
+                          title="Export as a simple text file without formatting"
                           className="w-full px-4 py-3 text-left text-[10px] uppercase font-bold hover:bg-[#F5F5F5] flex items-center gap-3"
                         >
                           <FileText size={14} className="text-gray-600" /> Plain Text
@@ -948,6 +1011,7 @@ export default function App() {
 
             <button 
               onClick={() => setShowHistory(true)}
+              title="View and manage previously generated Web-books"
               className="flex items-center gap-2 text-[10px] md:text-[11px] uppercase tracking-wider font-bold hover:opacity-70 transition-opacity"
             >
               <History size={14} /> <span className="hidden sm:inline">History</span>
@@ -967,12 +1031,14 @@ export default function App() {
               <h2 className="font-serif italic text-sm uppercase opacity-50">Targeted Ingestion</h2>
               <button 
                 onClick={startNewSearch}
+                title="Reset engine and start a new search"
                 className="text-[10px] uppercase font-bold flex items-center gap-1 hover:underline"
               >
                 <Plus size={12}/> New Search
               </button>
             </div>
             <form 
+              ref={formRef}
               onSubmit={handleSearch} 
               className="relative"
               onMouseEnter={() => setIsHoveringInput(true)}
@@ -984,12 +1050,12 @@ export default function App() {
               <AnimatePresence>
                 {isOverflowing && isHoveringInput && query && (
                   <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    initial={{ opacity: 0, y: tooltipPosition === 'top' ? 10 : -10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute bottom-full left-0 mb-3 w-full z-[60] pointer-events-none"
+                    exit={{ opacity: 0, y: tooltipPosition === 'top' ? 10 : -10, scale: 0.95 }}
+                    className={`absolute ${tooltipPosition === 'top' ? 'bottom-full mb-3' : 'top-full mt-3'} left-0 w-full z-[60] pointer-events-none`}
                   >
-                    <div className="bg-yellow-300 text-[#141414] p-4 border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(20,20,20,1)] text-sm font-mono break-words">
+                    <div className="bg-yellow-300 text-[#141414] p-4 border-2 border-[#141414] shadow-[6px_6px_0px_0px_rgba(20,20,20,1)] text-sm font-mono break-words max-h-[40vh] overflow-y-auto custom-scrollbar pointer-events-auto">
                       <div className="flex items-center gap-2 mb-2 opacity-70 text-[10px] uppercase font-bold tracking-widest">
                         <Info size={12} className="text-[#141414]" /> Full Search Query Preview
                       </div>
@@ -1001,7 +1067,7 @@ export default function App() {
                       </div>
                     </div>
                     {/* Tooltip Arrow */}
-                    <div className="absolute -bottom-2 left-8 w-4 h-4 bg-yellow-300 border-r-2 border-b-2 border-[#141414] rotate-45" />
+                    <div className={`absolute ${tooltipPosition === 'top' ? '-bottom-2 border-r-2 border-b-2' : '-top-2 border-l-2 border-t-2'} left-8 w-4 h-4 bg-yellow-300 border-[#141414] rotate-45`} />
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1024,6 +1090,7 @@ export default function App() {
               />
               <button 
                 type="submit"
+                title="Execute evolutionary synthesis pipeline"
                 className="absolute right-4 top-1/2 -translate-y-1/2 w-8 h-8 bg-[#141414] text-[#E4E3E0] flex items-center justify-center hover:bg-opacity-90 transition-colors disabled:opacity-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,0.2)]"
                 disabled={state.status !== 'idle' && state.status !== 'complete'}
               >
@@ -1037,7 +1104,50 @@ export default function App() {
 
           {/* Engine Status */}
           <section className="bg-white border border-[#141414] p-6 shadow-[4px_4px_0px_0px_rgba(20,20,20,1)]">
-            <h2 className="font-serif italic text-sm uppercase mb-6 opacity-50">Evolutionary Metrics</h2>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="font-serif italic text-sm uppercase opacity-50">Evolutionary Metrics</h2>
+              <div className="flex items-center gap-3">
+                <AnimatePresence>
+                  {state.status !== 'idle' && state.status !== 'complete' && !showArtifacts && (
+                    <motion.div
+                      initial={{ opacity: 0, x: 10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 10 }}
+                      className="flex items-center gap-2"
+                    >
+                      <div className="flex items-center gap-1 bg-red-50 px-1.5 py-0.5 border border-red-200 rounded-sm">
+                        <motion.div 
+                          animate={{ scale: [1, 1.5, 1], opacity: [1, 0.5, 1] }}
+                          transition={{ repeat: Infinity, duration: 1.5 }}
+                          className="w-1.5 h-1.5 bg-red-600 rounded-full"
+                        />
+                        <motion.span
+                          animate={{ opacity: [1, 0, 1, 0.2, 1] }}
+                          transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }}
+                          className="text-[8px] font-black text-red-600 tracking-tighter"
+                        >
+                          LIVE
+                        </motion.span>
+                      </div>
+                      <motion.span
+                        animate={{ opacity: [0.6, 1, 0.6] }}
+                        transition={{ repeat: Infinity, duration: 2 }}
+                        className="text-[9px] uppercase font-bold tracking-tighter text-blue-600 hidden sm:inline"
+                      >
+                        Click [Show Artifacts] to monitor synthesis trace
+                      </motion.span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <button 
+                  onClick={() => setShowArtifacts(!showArtifacts)}
+                  title={showArtifacts ? "Close the technical artifacts panel" : "View raw search results, evolutionary population, and assembly trace"}
+                  className={`text-[10px] uppercase font-bold flex items-center gap-1 px-2 py-1 border border-[#141414] transition-all ${showArtifacts ? 'bg-[#141414] text-white' : 'hover:bg-[#F5F5F5]'}`}
+                >
+                  <Layers size={12}/> {showArtifacts ? 'Hide Artifacts' : 'Show Artifacts'}
+                </button>
+              </div>
+            </div>
             
             <div className="space-y-6">
               <div className="flex justify-between items-end border-b border-[#141414] pb-2">
@@ -1094,6 +1204,93 @@ export default function App() {
               γ: Redundancy Penalty (Overlap)
             </p>
           </section>
+
+          {/* Artifacts Panel (Collapsible) */}
+          <AnimatePresence>
+            {showArtifacts && (
+              <motion.section 
+                ref={artifactsRef}
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="bg-[#141414] text-[#E4E3E0] p-6 border border-[#141414] shadow-[4px_4px_0px_0px_rgba(20,20,20,0.5)] space-y-6 font-mono text-[10px]">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <h3 className="uppercase font-bold tracking-widest flex items-center gap-2">
+                      <Cpu size={14} /> System Artifacts
+                    </h3>
+                    <button onClick={() => setShowArtifacts(false)} title="Close panel" className="hover:opacity-50">
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Raw Search Results */}
+                  <div className="space-y-2">
+                    <h4 className="text-blue-400 uppercase font-bold border-l-2 border-blue-400 pl-2">Raw Search Grounding</h4>
+                    {state.artifacts?.rawSearchResults && state.artifacts.rawSearchResults.length > 0 ? (
+                      <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                        {state.artifacts.rawSearchResults.map((chunk: any, i: number) => (
+                          <div key={i} className="bg-white/5 p-2 border border-white/10">
+                            <div className="font-bold text-white truncate">{chunk.web?.title || 'Untitled Source'}</div>
+                            <div className="opacity-50 truncate">{chunk.web?.uri}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="opacity-30 italic">No search artifacts captured yet.</div>
+                    )}
+                  </div>
+
+                  {/* Evolved Population */}
+                  <div className="space-y-2">
+                    <h4 className="text-green-400 uppercase font-bold border-l-2 border-green-400 pl-2">Evolved Population</h4>
+                    {state.artifacts?.evolvedPopulation && state.artifacts.evolvedPopulation.length > 0 ? (
+                      <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                        {state.artifacts.evolvedPopulation.map((gen: WebPageGenotype, i: number) => (
+                          <div key={i} className="bg-white/5 p-2 border border-white/10 flex justify-between items-center">
+                            <div className="truncate flex-1 mr-4">
+                              <div className="font-bold text-white truncate">{gen.title}</div>
+                              <div className="opacity-50 truncate text-[8px]">{gen.url}</div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-green-400 font-bold">{(gen.fitness || 0).toFixed(4)}</div>
+                              <div className="text-[8px] opacity-40">FITNESS</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="opacity-30 italic">Evolution in progress...</div>
+                    )}
+                  </div>
+
+                  {/* Assembly Pipeline */}
+                  <div className="space-y-2">
+                    <h4 className="text-orange-400 uppercase font-bold border-l-2 border-orange-400 pl-2">Assembly Pipeline</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-white/5 p-2 border border-white/10">
+                        <div className="opacity-50 mb-1">INPUT (TOP GENES)</div>
+                        <div className="font-bold text-white">
+                          {state.artifacts?.assemblyInput ? `${state.artifacts.assemblyInput.length} Sources` : 'Pending'}
+                        </div>
+                      </div>
+                      <div className="bg-white/5 p-2 border border-white/10">
+                        <div className="opacity-50 mb-1">OUTPUT (BOOK)</div>
+                        <div className="font-bold text-white">
+                          {state.artifacts?.assemblyOutput ? `${state.artifacts.assemblyOutput.chapters.length} Chapters` : 'Pending'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 text-[8px] opacity-30 italic text-center border-t border-white/10">
+                    Real-time trace of the evolutionary assembly process.
+                  </div>
+                </div>
+              </motion.section>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Right Column: Results */}
@@ -1187,7 +1384,7 @@ export default function App() {
                     <h3 className="text-[14px] uppercase font-bold mb-16 tracking-[0.3em] border-b-2 border-[#141414] pb-6 inline-block self-start">Table of Contents</h3>
                     <div className="space-y-8 flex-1">
                       {chapterRenderPlan.map(({ chapter, titlePageNumber }, i) => (
-                        <a key={i} href={`#chapter-${i}`} className="flex items-end gap-6 group">
+                        <a key={i} href={`#chapter-${i}`} title={`Navigate to Chapter ${i+1}`} className="flex items-end gap-6 group">
                           <span className="font-mono text-base opacity-40">0{i+1}</span>
                           <span className="text-xl font-medium group-hover:underline underline-offset-8 decoration-1">{chapter.title}</span>
                           <div className="flex-1 border-b border-dotted border-[#141414] opacity-20 mb-2" />
@@ -1292,6 +1489,7 @@ export default function App() {
                                                   href={def.sourceUrl} 
                                                   target="_blank" 
                                                   rel="noopener noreferrer"
+                                                  title="Read the full definition at the original source"
                                                   className="text-blue-400 hover:underline font-bold not-italic"
                                                 >
                                                   [Full Definition]
@@ -1313,6 +1511,7 @@ export default function App() {
                                           href={chapter.sourceUrls[0].url} 
                                           target="_blank" 
                                           rel="noopener noreferrer"
+                                          title="Verify this information at the primary source"
                                           className="hover:underline"
                                         >
                                           {chapter.sourceUrls[0].title}
@@ -1351,6 +1550,7 @@ export default function App() {
                       <a 
                         href="#top"
                         onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        title="Scroll back to the beginning of the book"
                         className="text-[10px] uppercase font-bold hover:underline flex items-center gap-2"
                       >
                         Back to Top
@@ -1387,7 +1587,7 @@ export default function App() {
                 <h2 className="text-lg font-serif italic font-bold flex items-center gap-2">
                   <History size={20} /> Archive & History
                 </h2>
-                <button onClick={() => setShowHistory(false)} className="p-2 hover:bg-[#F5F5F5] rounded-full transition-colors">
+                <button onClick={() => setShowHistory(false)} title="Close history" className="p-2 hover:bg-[#F5F5F5] rounded-full transition-colors">
                   <X size={20} />
                 </button>
               </div>
@@ -1413,6 +1613,7 @@ export default function App() {
                             e.stopPropagation();
                             deleteHistoryItem(item.id);
                           }}
+                          title="Delete this book from history"
                           className="text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 rounded"
                         >
                           <Trash2 size={14} />
@@ -1423,6 +1624,7 @@ export default function App() {
                         <span className="text-[10px] uppercase font-bold opacity-60">{item.chapters.length} Chapters</span>
                         <button 
                           onClick={() => viewHistoryItem(item)}
+                          title="Load this archived Web-book into the viewer"
                           className="text-[10px] uppercase font-bold flex items-center gap-1 hover:underline"
                         >
                           View Book <ChevronRight size={12} />
@@ -1437,6 +1639,7 @@ export default function App() {
                 <div className="p-6 border-t border-[#141414] bg-white">
                   <button 
                     onClick={clearAllHistory}
+                    title="Permanently delete all archived Web-books"
                     className="w-full py-3 border border-red-600 text-red-600 text-[11px] uppercase font-bold tracking-widest hover:bg-red-600 hover:text-white transition-all"
                   >
                     Clear All History
