@@ -18,57 +18,63 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Pr
 }
 
 function repairTruncatedJSON(jsonString: string): string {
-  let stack: string[] = [];
-  let inString = false;
-  let escaped = false;
-  
-  for (let i = 0; i < jsonString.length; i++) {
-    const char = jsonString[i];
+  const attemptRepair = (str: string) => {
+    let stack: string[] = [];
+    let inString = false;
+    let escaped = false;
     
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    
-    if (inString) continue;
-    
-    if (char === '{' || char === '[') {
-      stack.push(char);
-    } else if (char === '}' || char === ']') {
-      if (stack.length > 0) {
-        const last = stack[stack.length - 1];
-        if ((char === '}' && last === '{') || (char === ']' && last === '[')) {
-          stack.pop();
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (escaped) { escaped = false; continue; }
+      if (char === '\\') { escaped = true; continue; }
+      if (char === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      
+      if (char === '{' || char === '[') {
+        stack.push(char);
+      } else if (char === '}' || char === ']') {
+        if (stack.length > 0) {
+          const last = stack[stack.length - 1];
+          if ((char === '}' && last === '{') || (char === ']' && last === '[')) {
+            stack.pop();
+          }
         }
+      }
+    }
+    
+    let repaired = str;
+    if (inString) repaired += '"';
+    while (stack.length > 0) {
+      const last = stack.pop();
+      if (last === '{') repaired += '}';
+      else if (last === '[') repaired += ']';
+    }
+    return repaired;
+  };
+
+  // First attempt: just close open structures
+  let firstTry = attemptRepair(jsonString);
+  try {
+    JSON.parse(firstTry);
+    return firstTry;
+  } catch (e) {
+    // Second attempt: backtrack to last comma and try again
+    // This handles cases where we are in the middle of a key or value
+    let lastComma = jsonString.lastIndexOf(',');
+    while (lastComma > 0) {
+      // Truncate before the comma to avoid trailing comma issues
+      let truncated = jsonString.substring(0, lastComma);
+      let secondTry = attemptRepair(truncated);
+      try {
+        JSON.parse(secondTry);
+        return secondTry;
+      } catch (inner) {
+        lastComma = jsonString.lastIndexOf(',', lastComma - 1);
       }
     }
   }
   
-  let repaired = jsonString;
-  
-  // If we are inside a string, close it
-  if (inString) {
-    repaired += '"';
-  }
-  
-  // Close open brackets/braces in reverse order
-  while (stack.length > 0) {
-    const last = stack.pop();
-    if (last === '{') repaired += '}';
-    else if (last === '[') repaired += ']';
-  }
-  
-  return repaired;
+  return firstTry; // Fallback to first try if all else fails
 }
 
 export async function searchAndExtract(query: string): Promise<{ results: WebPageGenotype[], artifacts: any }> {
@@ -89,7 +95,7 @@ export async function searchAndExtract(query: string): Promise<{ results: WebPag
       systemInstruction: "You are a precise data extractor. Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array for that source's definitions.",
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
-      maxOutputTokens: 4000,
+      maxOutputTokens: 8192,
       responseSchema: {
         type: Type.ARRAY,
         items: {
@@ -236,27 +242,28 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
   const ai = getAI();
   const model = "gemini-3-flash-preview";
   
-  // 1. Generate a detailed 10-chapter outline
-  const truncatedData = optimalPopulation.slice(0, 4).map(p => ({
+  // 1. Generate a detailed 18-chapter candidate pool (increased for evolutionary selection)
+  const truncatedData = optimalPopulation.slice(0, 5).map(p => ({
     title: p.title,
     url: p.url,
-    content: p.content.substring(0, 1000),
-    definitions: p.definitions.slice(0, 4),
-    subTopics: p.subTopics.slice(0, 3)
+    content: p.content.substring(0, 1200),
+    definitions: p.definitions.slice(0, 5),
+    subTopics: p.subTopics.slice(0, 4)
   }));
 
   const outlineResponse = await withRetry(() => ai.models.generateContent({
     model,
     contents: `Topic: ${topic}. Data: ${JSON.stringify(truncatedData)}. 
-    Create a detailed 10-chapter outline for a comprehensive, full-length Web-book. 
+    Create a detailed 18-chapter candidate pool for a comprehensive Web-book. 
     For each chapter, provide:
     1. A compelling title.
     2. A brief 2-sentence focus description.
     3. 3 key terms to define.
     4. 2 sub-topics to explore.
-    5. A visual seed keyword for an image.`,
+    5. A visual seed keyword for an image.
+    6. A 'priorityScore' (1-100) representing how essential this chapter is to the core topic.`,
     config: {
-      systemInstruction: "You are a master book architect. Output valid JSON only. Create a 10-chapter outline that flows logically from introduction to advanced concepts and future outlook. Ensure all terms and sub-topics are meaningful and relevant to the topic. Strictly avoid placeholders, random strings, or meaningless identifiers.",
+      systemInstruction: "You are a master book architect. Output valid JSON only. Create an 18-chapter candidate pool. This is an evolutionary selection process: some chapters will be pruned later based on quality. Ensure a logical flow from basics to advanced. Assign higher priorityScore to foundational and critical chapters. Strictly avoid placeholders or meaningless text.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -271,9 +278,10 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
                 focus: { type: Type.STRING },
                 terms: { type: Type.ARRAY, items: { type: Type.STRING } },
                 subTopicTitles: { type: Type.ARRAY, items: { type: Type.STRING } },
-                visualSeed: { type: Type.STRING }
+                visualSeed: { type: Type.STRING },
+                priorityScore: { type: Type.NUMBER }
               },
-              required: ["title", "focus", "terms", "subTopicTitles", "visualSeed"]
+              required: ["title", "focus", "terms", "subTopicTitles", "visualSeed", "priorityScore"]
             }
           }
         },
@@ -306,7 +314,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
     };
   }
 
-  // 2. Generate content for each chapter (parallelized for speed)
+  // 2. Generate content for all 18 candidates (parallelized)
   const chapterPromises = outlineData.outline.map(async (chapterOutline: any, index: number) => {
     const chapterResponse = await withRetry(() => ai.models.generateContent({
       model,
@@ -355,6 +363,7 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
     }
 
     const content = chapterData?.content;
+    // Quality Check: Purge chapters with nonsense or poisoning data
     if (!content || !isMeaningfulText(content)) return null;
 
     const filteredDefinitions = getRenderableDefinitions(chapterData?.definitions || [])
@@ -368,15 +377,25 @@ export async function assembleWebBook(optimalPopulation: WebPageGenotype[], topi
       definitions: filteredDefinitions,
       subTopics: filteredSubTopics,
       sourceUrls: truncatedData.map(d => ({ title: d.title, url: d.url })),
-      visualSeed: chapterOutline.visualSeed || "evolution"
+      visualSeed: chapterOutline.visualSeed || "evolution",
+      priorityScore: chapterOutline.priorityScore || 50,
+      originalIndex: index
     };
   });
 
-  const chapters = (await Promise.all(chapterPromises)).filter((c): c is any => c !== null);
+  // 3. Evolutionary Selection: Filter, Rank, and Pick Top 10
+  const allGeneratedChapters = (await Promise.all(chapterPromises)).filter((c): c is any => c !== null);
+  
+  // Sort by priorityScore (descending) to get the most relevant ones
+  const selectedChapters = allGeneratedChapters
+    .sort((a, b) => b.priorityScore - a.priorityScore)
+    .slice(0, 10)
+    // Re-sort by originalIndex to maintain the logical flow of the book
+    .sort((a, b) => a.originalIndex - b.originalIndex);
 
   return {
     topic: outlineData.topic,
-    chapters,
+    chapters: selectedChapters,
     id: `book-${Date.now()}`,
     timestamp: Date.now()
   };
