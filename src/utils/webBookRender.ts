@@ -153,7 +153,8 @@ export function getRenderableSubTopics<T extends SubTopicLike>(subTopics: T[] = 
 }
 
 export function buildChapterRenderPlan(chapters: Chapter[]): ChapterRenderPlan[] {
-  let nextPageNumber = 2;
+  // Page 1 is the cover and page 2 is the table of contents.
+  let nextPageNumber = 3;
 
   return chapters.map((chapter) => {
     const renderableDefinitions = getRenderableDefinitions(chapter.definitions || [], 6);

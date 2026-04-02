@@ -26,10 +26,9 @@ import {
   writeBatch,
   type Firestore,
 } from "firebase/firestore";
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
-// Declare html2pdf as a global variable to avoid TypeScript errors
-// It is loaded via CDN in index.html to avoid module resolution issues
-declare const html2pdf: any;
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, 
@@ -84,6 +83,214 @@ let firebaseApp: FirebaseApp | null = null;
 let firebaseAuth: Auth | null = null;
 let firebaseDb: Firestore | null = null;
 let authInitPromise: Promise<User | null> | null = null;
+
+type PdfLinkAnnotation = {
+  sourcePageNumber: number;
+  targetPageNumber: number;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
+};
+
+const PDF_EXPORT_PAGE_WIDTH = 794;
+const PDF_EXPORT_PAGE_HEIGHT = 1123;
+const PDF_IMAGE_MAX_DIMENSION = 1600;
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const getPdfRenderScale = (pageCount: number) => {
+  if (pageCount >= 12) return 1.35;
+  if (pageCount >= 8) return 1.5;
+  if (pageCount >= 5) return 1.7;
+  return 1.9;
+};
+
+const inlineImagesForExport = async (
+  root: HTMLElement,
+  options: { maxDimension: number; quality: number; hideOnError?: boolean }
+): Promise<void> => {
+  const images = Array.from(root.querySelectorAll('img'));
+
+  await Promise.all(
+    images.map(async (img) => {
+      try {
+        if (!img.src || img.src.startsWith('data:') || img.style.display === 'none') return;
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const tempImg = new Image();
+        tempImg.crossOrigin = 'anonymous';
+
+        await new Promise((resolve, reject) => {
+          const timeout = window.setTimeout(() => reject(new Error('Image load timeout')), 7000);
+          tempImg.onload = () => {
+            window.clearTimeout(timeout);
+            resolve(null);
+          };
+          tempImg.onerror = () => {
+            window.clearTimeout(timeout);
+            reject(new Error('Image load error'));
+          };
+          tempImg.src = img.src;
+        });
+
+        const originalWidth = tempImg.naturalWidth || tempImg.width;
+        const originalHeight = tempImg.naturalHeight || tempImg.height;
+        if (!ctx || !originalWidth || !originalHeight) {
+          throw new Error('Image dimensions unavailable');
+        }
+
+        let width = originalWidth;
+        let height = originalHeight;
+        if (width > options.maxDimension || height > options.maxDimension) {
+          if (width > height) {
+            height = Math.round((height / width) * options.maxDimension);
+            width = options.maxDimension;
+          } else {
+            width = Math.round((width / height) * options.maxDimension);
+            height = options.maxDimension;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(tempImg, 0, 0, width, height);
+        img.src = canvas.toDataURL('image/jpeg', options.quality);
+        img.style.filter = 'none';
+        img.style.boxShadow = 'none';
+        img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
+      } catch (error) {
+        console.warn('Skipping image during export preprocessing:', error);
+        if (options.hideOnError) {
+          img.style.display = 'none';
+        }
+      }
+    })
+  );
+};
+
+const createHiddenExportClone = (element: HTMLElement): { clone: HTMLElement; cleanup: () => void } => {
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('aria-hidden', 'true');
+  Object.assign(wrapper.style, {
+    position: 'fixed',
+    left: '-20000px',
+    top: '0',
+    width: `${PDF_EXPORT_PAGE_WIDTH}px`,
+    zIndex: '-1',
+    pointerEvents: 'none',
+    background: 'white',
+  });
+
+  const clone = element.cloneNode(true) as HTMLElement;
+  clone.style.width = `${PDF_EXPORT_PAGE_WIDTH}px`;
+  clone.style.maxWidth = `${PDF_EXPORT_PAGE_WIDTH}px`;
+  clone.style.margin = '0';
+  clone.style.padding = '0';
+  clone.style.background = 'transparent';
+  clone.style.boxShadow = 'none';
+  clone.style.border = 'none';
+  clone.style.gap = '0';
+
+  clone.querySelectorAll<HTMLElement>('[data-pdf-page-number]').forEach((page) => {
+    page.style.width = `${PDF_EXPORT_PAGE_WIDTH}px`;
+    page.style.minHeight = `${PDF_EXPORT_PAGE_HEIGHT}px`;
+    page.style.margin = '0';
+    page.style.borderRadius = '0';
+    page.style.boxShadow = 'none';
+    page.style.overflow = 'hidden';
+    page.style.setProperty('break-inside', 'avoid');
+    page.style.pageBreakAfter = 'always';
+  });
+
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+
+  return {
+    clone,
+    cleanup: () => wrapper.remove(),
+  };
+};
+
+const prepareWordFooterForExport = (root: HTMLElement): void => {
+  const footerSection = root.querySelector<HTMLElement>('[data-pdf-page-kind="footer"]');
+  if (!footerSection) return;
+
+  footerSection.style.padding = '40px 40px 28px';
+  footerSection.style.minHeight = '170px';
+  footerSection.style.display = 'flex';
+  footerSection.style.flexDirection = 'column';
+  footerSection.style.justifyContent = 'space-between';
+  footerSection.style.gap = '16px';
+
+  const footerRow = footerSection.firstElementChild as HTMLElement | null;
+  const footerPageNumber = footerSection.lastElementChild as HTMLElement | null;
+  const footerMeta = footerRow?.firstElementChild as HTMLElement | null;
+  const footerLink = footerRow?.querySelector<HTMLElement>('a[href="#top"]');
+
+  if (footerRow && footerMeta && footerLink) {
+    const table = document.createElement('table');
+    table.setAttribute('role', 'presentation');
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+    table.style.borderSpacing = '0';
+
+    const row = document.createElement('tr');
+    const leftCell = document.createElement('td');
+    const rightCell = document.createElement('td');
+
+    leftCell.style.padding = '0';
+    leftCell.style.verticalAlign = 'bottom';
+    rightCell.style.padding = '0';
+    rightCell.style.verticalAlign = 'bottom';
+    rightCell.style.textAlign = 'right';
+    rightCell.style.whiteSpace = 'nowrap';
+
+    footerLink.style.display = 'inline-block';
+    footerLink.style.fontWeight = '700';
+    footerLink.style.letterSpacing = '0.12em';
+    footerLink.style.textTransform = 'uppercase';
+
+    leftCell.appendChild(footerMeta);
+    rightCell.appendChild(footerLink);
+    row.append(leftCell, rightCell);
+    table.appendChild(row);
+    footerRow.replaceWith(table);
+  }
+
+  if (footerPageNumber) {
+    footerPageNumber.style.marginTop = '0';
+    footerPageNumber.style.textAlign = 'left';
+  }
+};
+
+const collectPdfLinkAnnotations = (root: HTMLElement): PdfLinkAnnotation[] =>
+  Array.from(root.querySelectorAll<HTMLElement>('[data-pdf-target-page]'))
+    .map((element) => {
+      const sourcePage = element.closest<HTMLElement>('[data-pdf-page-number]');
+      const sourcePageNumber = Number(sourcePage?.dataset.pdfPageNumber);
+      const targetPageNumber = Number(element.dataset.pdfTargetPage);
+
+      if (!sourcePage || !Number.isFinite(sourcePageNumber) || !Number.isFinite(targetPageNumber)) {
+        return null;
+      }
+
+      const sourceRect = sourcePage.getBoundingClientRect();
+      const elementRect = element.getBoundingClientRect();
+      if (!sourceRect.width || !sourceRect.height || !elementRect.width || !elementRect.height) {
+        return null;
+      }
+
+      return {
+        sourcePageNumber,
+        targetPageNumber,
+        xRatio: (elementRect.left - sourceRect.left) / sourceRect.width,
+        yRatio: (elementRect.top - sourceRect.top) / sourceRect.height,
+        widthRatio: elementRect.width / sourceRect.width,
+        heightRatio: elementRect.height / sourceRect.height,
+      };
+    })
+    .filter((annotation): annotation is PdfLinkAnnotation => Boolean(annotation));
 
 const isFirebaseConfigured = (): boolean => Boolean(
   FIREBASE_CONFIG.apiKey &&
@@ -578,7 +785,8 @@ export default function App() {
 
   const exportToHTML = () => {
     if (!webBook) return;
-    const htmlContent = document.querySelector('.web-book-container')?.innerHTML;
+    const element = document.querySelector('.web-book-container') as HTMLElement | null;
+    const htmlContent = element?.outerHTML;
     if (!htmlContent) return;
 
     setIsExporting(true);
@@ -594,16 +802,24 @@ export default function App() {
           <script src="https://cdn.tailwindcss.com"></script>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
           <style>
-            body { font-family: 'Inter', sans-serif; background: #E4E3E0; padding: 40px 0; }
+            html { scroll-behavior: smooth; }
+            body { font-family: 'Inter', sans-serif; background: #E4E3E0; padding: 40px 16px; margin: 0; overflow-x: hidden; }
             .font-serif { font-family: 'Playfair Display', serif; }
             .font-mono { font-family: 'JetBrains Mono', monospace; }
-            * { word-break: break-word; overflow-wrap: break-word; }
+            * { word-break: break-word; overflow-wrap: break-word; box-sizing: border-box; }
+            a { color: inherit; }
+            .web-book-container { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
+            .web-book-page { background: white; border: 1px solid #141414; box-shadow: 12px 12px 0 rgba(20, 20, 20, 0.12); overflow: hidden; }
+            @media print {
+              body { background: white; padding: 0; }
+              .web-book-container { max-width: none; gap: 0; }
+              .web-book-page { box-shadow: none; break-after: page; page-break-after: always; }
+              .web-book-page:last-child { break-after: auto; page-break-after: auto; }
+            }
           </style>
         </head>
         <body>
-          <div id="top" class="max-w-[850px] mx-auto bg-white border border-black shadow-xl">
-            ${htmlContent}
-          </div>
+          ${htmlContent}
         </body>
         </html>
       `;
@@ -621,7 +837,7 @@ export default function App() {
 
   const exportToWord = async () => {
     if (!webBook) return;
-    const element = document.querySelector('.web-book-container');
+    const element = document.querySelector('.web-book-container') as HTMLElement | null;
     if (!element) return;
 
     setIsExporting(true);
@@ -684,15 +900,25 @@ export default function App() {
         img.style.margin = '20px auto';
       }
 
-      // Add name anchors for TOC links to work better in Word
-      clone.querySelectorAll('[id^="chapter-"]').forEach(el => {
+      // Add name anchors for internal links to work better in Word
+      clone.querySelectorAll('[id]').forEach(el => {
         const id = el.getAttribute('id');
+        if (!id) return;
+
         const anchor = document.createElement('a');
-        anchor.setAttribute('name', id || '');
+        anchor.setAttribute('name', id);
         el.prepend(anchor);
       });
 
-      const htmlContent = clone.innerHTML;
+      if (!clone.querySelector('a[name="top"]')) {
+        const topAnchor = document.createElement('a');
+        topAnchor.setAttribute('name', 'top');
+        clone.prepend(topAnchor);
+      }
+
+      prepareWordFooterForExport(clone);
+
+      const htmlContent = clone.outerHTML;
       const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' "+
               "xmlns:w='urn:schemas-microsoft-com:office:word' "+
               "xmlns='http://www.w3.org/TR/REC-html40'>"+
@@ -726,122 +952,111 @@ export default function App() {
 
   const exportToPDF = async () => {
     if (!webBook) return;
-    const element = document.querySelector('.web-book-container');
+    const element = document.querySelector('.web-book-container') as HTMLElement | null;
     if (!element) return;
 
     setIsExporting(true);
     setShowExportOptions(false);
 
-    // Use a small delay to allow UI to update
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await wait(150);
+
+    let cleanup: (() => void) | null = null;
 
     try {
-      // Create a simplified clone for PDF
-      const clone = element.cloneNode(true) as HTMLElement;
-      
-      // Remove heavy elements
-      clone.querySelectorAll('button, .print\\:hidden, [data-html2canvas-ignore]').forEach(el => el.remove());
-      
-      // Simplify styles for PDF rendering
-      clone.style.width = '850px'; // Standard A4 width-ish
-      clone.style.background = 'white';
-      clone.style.boxShadow = 'none';
-      clone.style.margin = '0';
-      clone.style.position = 'fixed';
-      clone.style.left = '-9999px';
-      clone.style.top = '0';
-      clone.style.zIndex = '-1000';
-      document.body.appendChild(clone);
-      
-      // Parallel image processing for speed
-      const images = Array.from(clone.querySelectorAll('img'));
-      await Promise.all(images.map(async (img) => {
-        try {
-          // Skip if already base64 or hidden
-          if (img.src.startsWith('data:') || img.style.display === 'none') return;
-          
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          const tempImg = new Image();
-          tempImg.crossOrigin = 'anonymous';
-          
-          await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error("Image load timeout")), 5000);
-            tempImg.onload = () => { clearTimeout(timeout); resolve(null); };
-            tempImg.onerror = () => { clearTimeout(timeout); reject(new Error("Image load error")); };
-            tempImg.src = img.src;
-          });
+      const hiddenClone = createHiddenExportClone(element);
+      cleanup = hiddenClone.cleanup;
+      const { clone } = hiddenClone;
 
-          // Downscale for PDF to save memory and prevent hanging
-          const maxDim = 800; // Smaller for better performance
-          let w = tempImg.width;
-          let h = tempImg.height;
-          if (w > maxDim || h > maxDim) {
-            if (w > h) { h = (h / w) * maxDim; w = maxDim; }
-            else { w = (w / h) * maxDim; h = maxDim; }
-          }
+      await wait(100);
+      await inlineImagesForExport(clone, {
+        maxDimension: PDF_IMAGE_MAX_DIMENSION,
+        quality: 0.84,
+        hideOnError: true,
+      });
+      await wait(100);
 
-          canvas.width = w;
-          canvas.height = h;
-          ctx?.drawImage(tempImg, 0, 0, w, h);
-          img.src = canvas.toDataURL('image/jpeg', 0.5); // Lower quality for speed/memory
-          
-          img.style.filter = 'none';
-          img.style.boxShadow = 'none';
-          img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
-        } catch (e) {
-          console.warn("Skipping image in PDF export:", e);
-          img.style.display = 'none';
-        }
-      }));
-
-      const opt: any = {
-        margin: [10, 10] as [number, number],
-        filename: `${webBook.topic.replace(/\s+/g, '_')}.pdf`,
-        image: { type: 'jpeg', quality: 0.7 },
-        html2canvas: { 
-          scale: 1, 
-          useCORS: true, 
-          logging: false,
-          letterRendering: false, // Faster
-          allowTaint: false,
-          removeContainer: true,
-          imageTimeout: 15000
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait', compress: true },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-      };
-
-      if (typeof html2pdf === 'undefined') {
-        throw new Error("html2pdf library not loaded from CDN");
+      const linkAnnotations = collectPdfLinkAnnotations(clone);
+      const pages = Array.from(clone.querySelectorAll<HTMLElement>('[data-pdf-page-number]'));
+      if (pages.length === 0) {
+        throw new Error('No paged content found for PDF export');
       }
 
-      // Use a small delay before starting PDF generation to ensure DOM is ready
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      await html2pdf().from(clone).set(opt).save();
-      document.body.removeChild(clone);
+      await document.fonts?.ready?.catch(() => undefined);
+
+      const pdf = new jsPDF({
+        unit: 'mm',
+        format: 'a4',
+        orientation: 'portrait',
+        compress: true,
+        putOnlyUsedFonts: true,
+      });
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const renderScale = getPdfRenderScale(pages.length);
+
+      for (const [index, page] of pages.entries()) {
+        if (index > 0) {
+          pdf.addPage();
+        }
+
+        const canvas = await html2canvas(page, {
+          scale: renderScale,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+          imageTimeout: 15000,
+          removeContainer: true,
+          foreignObjectRendering: false,
+          windowWidth: PDF_EXPORT_PAGE_WIDTH,
+          scrollX: 0,
+          scrollY: 0,
+        });
+
+        const imageData = canvas.toDataURL('image/jpeg', 0.92);
+        pdf.addImage(imageData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'MEDIUM');
+        canvas.width = 0;
+        canvas.height = 0;
+
+        const sourcePageNumber = Number(page.dataset.pdfPageNumber);
+        if (!Number.isFinite(sourcePageNumber)) continue;
+
+        linkAnnotations
+          .filter((annotation) => annotation.sourcePageNumber === sourcePageNumber)
+          .forEach((annotation) => {
+            pdf.link(
+              annotation.xRatio * pdfWidth,
+              annotation.yRatio * pdfHeight,
+              annotation.widthRatio * pdfWidth,
+              annotation.heightRatio * pdfHeight,
+              { pageNumber: annotation.targetPageNumber }
+            );
+          });
+
+        await wait(0);
+      }
+
+      pdf.save(`${webBook.topic.replace(/\s+/g, '_')}.pdf`);
     } catch (err) {
-      console.error("PDF Export failed:", err);
-      alert("High-Res PDF export failed due to resource limits. This is common for large books in browser environments. Please use the 'Print / Save as PDF' option which is much more reliable.");
+      console.error('PDF Export failed:', err);
+      alert("High-res PDF export still hit a browser limit before finishing. The exporter now renders one page at a time, but very large books or blocked remote images can still fail. Please use 'Print / Save as PDF' as the fallback if needed.");
     } finally {
+      cleanup?.();
       setIsExporting(false);
     }
   };
 
   const exportToPrint = () => {
     if (!webBook) return;
-    const element = document.querySelector('.web-book-container');
-    if (!element) return;
+    const element = document.querySelector('.web-book-container') as HTMLElement | null;
+    const htmlContent = element?.outerHTML;
+    if (!htmlContent) return;
 
-    // Create a new window for printing to bypass iframe restrictions
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
-      alert("Please allow popups to use the print feature.");
+      alert('Please allow popups to use the print feature.');
       return;
     }
 
-    const htmlContent = element.innerHTML;
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
@@ -850,9 +1065,13 @@ export default function App() {
           <script src="https://cdn.tailwindcss.com"></script>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
           <style>
-            body { font-family: 'Inter', sans-serif; background: white; padding: 0; margin: 0; }
+            html { scroll-behavior: smooth; }
+            body { font-family: 'Inter', sans-serif; background: white; padding: 24px 0; margin: 0; overflow-x: hidden; }
             .font-serif { font-family: 'Playfair Display', serif; }
             .print\\:hidden { display: none !important; }
+            .web-book-container { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
+            .web-book-page { background: white; break-after: page; page-break-after: always; }
+            .web-book-page:last-child { break-after: auto; page-break-after: auto; }
             @media print {
               body { padding: 0; }
               .no-print { display: none; }
@@ -861,15 +1080,11 @@ export default function App() {
           </style>
         </head>
         <body>
-          <div class="max-w-[850px] mx-auto p-8">
-            ${htmlContent}
-          </div>
+          ${htmlContent}
           <script>
-            // Wait for tailwind and fonts
             window.onload = () => {
               setTimeout(() => {
                 window.print();
-                // We don't close immediately to allow the user to see the print dialog
               }, 1000);
             };
           </script>
@@ -892,6 +1107,9 @@ export default function App() {
   };
 
   const chapterRenderPlan = webBook ? buildChapterRenderPlan(webBook.chapters) : [];
+  const finalDocumentPageNumber = chapterRenderPlan.length > 0
+    ? (chapterRenderPlan[chapterRenderPlan.length - 1].analysisPageNumber ?? chapterRenderPlan[chapterRenderPlan.length - 1].titlePageNumber) + 1
+    : 3;
 
   return (
     <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
@@ -1339,12 +1557,12 @@ export default function App() {
                 key="content"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="flex flex-col items-center gap-8 pb-20"
+                className="flex flex-col items-center gap-8 pb-20 overflow-x-hidden"
               >
                 {/* Document Container - Mimics A4/PDF */}
-                <div id="top" className="web-book-container w-full max-w-[850px] bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,1)] overflow-hidden print:shadow-none print:border-none print:max-w-none">
+                <div id="top" className="web-book-container w-full max-w-[900px] space-y-8 overflow-x-hidden print:max-w-none print:space-y-0">
                   {/* PDF Style Header / Cover */}
-                  <div className="bg-[#141414] text-[#E4E3E0] p-16 relative overflow-hidden text-center min-h-[1000px] flex flex-col justify-center print:break-inside-avoid print:page-break-after-always">
+                  <section id="page-1" data-pdf-page-number="1" data-pdf-page-kind="cover" className="web-book-page bg-[#141414] text-[#E4E3E0] p-16 relative overflow-hidden text-center min-h-[1000px] md:min-h-[1123px] flex flex-col justify-center border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.18)] print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
                     <div className="relative z-10">
                       <div className="flex flex-col items-center gap-4 mb-8">
                         <div className="w-12 h-12 border-2 border-[#E4E3E0] flex items-center justify-center rotate-45">
@@ -1352,7 +1570,7 @@ export default function App() {
                         </div>
                         <span className="text-[10px] uppercase tracking-[0.5em] opacity-60">Evolutionary Web-Book Engine</span>
                       </div>
-                      <h2 className="text-7xl font-serif italic font-bold tracking-tighter leading-tight mb-8">{webBook.topic}</h2>
+                      <h2 className="text-5xl md:text-7xl font-serif italic font-bold tracking-tighter leading-tight mb-8 break-words">{webBook.topic}</h2>
                       <div className="w-24 h-1 bg-[#E4E3E0] mx-auto mb-12 opacity-30" />
                       <div className="flex justify-center gap-16">
                         <div className="flex flex-col">
@@ -1377,16 +1595,16 @@ export default function App() {
                     <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-[10px] font-mono opacity-40">
                       PAGE 1
                     </div>
-                  </div>
+                  </section>
 
                   {/* Table of Contents - Page 2 Style */}
-                  <div className="p-20 border-b border-[#141414] bg-[#FAFAFA] min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always relative">
+                  <section id="page-2" data-pdf-page-number="2" data-pdf-page-kind="toc" className="web-book-page p-12 md:p-20 bg-[#FAFAFA] min-h-[1000px] md:min-h-[1123px] flex flex-col relative border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
                     <h3 className="text-[14px] uppercase font-bold mb-16 tracking-[0.3em] border-b-2 border-[#141414] pb-6 inline-block self-start">Table of Contents</h3>
                     <div className="space-y-8 flex-1">
                       {chapterRenderPlan.map(({ chapter, titlePageNumber }, i) => (
-                        <a key={i} href={`#chapter-${i}`} title={`Navigate to Chapter ${i+1}`} className="flex items-end gap-6 group">
+                        <a key={i} href={`#chapter-${i}`} data-pdf-target-page={titlePageNumber} title={`Navigate to Chapter ${i+1}`} className="flex items-end gap-4 md:gap-6 group">
                           <span className="font-mono text-base opacity-40">0{i+1}</span>
-                          <span className="text-xl font-medium group-hover:underline underline-offset-8 decoration-1">{chapter.title}</span>
+                          <span className="text-lg md:text-xl font-medium group-hover:underline underline-offset-8 decoration-1 break-words">{chapter.title}</span>
                           <div className="flex-1 border-b border-dotted border-[#141414] opacity-20 mb-2" />
                           <span className="font-mono text-base opacity-40">P.{titlePageNumber}</span>
                         </a>
@@ -1395,18 +1613,19 @@ export default function App() {
                     <div className="mt-auto pt-12 flex justify-center text-[10px] font-mono opacity-40">
                       PAGE 2
                     </div>
-                  </div>
+                  </section>
 
                   {/* Chapters - Paginated Experience */}
-                  <div className="bg-[#F0F0F0] p-8 space-y-12">
+                  <div className="space-y-8">
                     {chapterRenderPlan.map(({ chapter, titlePageNumber, analysisPageNumber, renderableDefinitions, renderableSubTopics }, i) => (
-                      <div key={i} className="space-y-12">
+                      <React.Fragment key={i}>
                         {/* Chapter Page 1: Title & Image */}
-                        <section id={`chapter-${i}`} className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
-                          <div className="flex items-center justify-between mb-12 border-b border-[#141414]/10 pb-6">
-                            <div className="flex items-center gap-4">
+                        <section id={`page-${titlePageNumber}`} data-pdf-page-number={String(titlePageNumber)} data-pdf-page-kind="chapter" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
+                          <div id={`chapter-${i}`} className="absolute top-0 left-0" aria-hidden="true" />
+                          <div className="flex items-center justify-between gap-4 mb-12 border-b border-[#141414]/10 pb-6">
+                            <div className="flex items-center gap-4 min-w-0">
                               <span className="w-10 h-10 bg-[#141414] text-white flex items-center justify-center font-mono text-sm">0{i+1}</span>
-                              <h3 className="text-4xl font-serif italic font-bold tracking-tight">{chapter.title}</h3>
+                              <h3 className="text-3xl md:text-4xl font-serif italic font-bold tracking-tight break-words">{chapter.title}</h3>
                             </div>
                             <div className="text-[10px] uppercase font-bold opacity-30 tracking-widest">Chapter {i+1} / {chapterRenderPlan.length}</div>
                           </div>
@@ -1421,7 +1640,7 @@ export default function App() {
                                 className="w-full h-full object-cover grayscale hover:grayscale-0 transition-all duration-1000 scale-105 group-hover:scale-100"
                               />
                             </div>
-                            <div className="absolute -bottom-4 right-8 bg-white border border-[#141414] px-4 py-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-3 shadow-md">
+                            <div className="absolute -bottom-4 right-8 max-w-[75%] bg-white border border-[#141414] px-4 py-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-3 shadow-md break-words">
                               <ImageIcon size={12} /> {chapter.visualSeed}
                             </div>
                           </div>
@@ -1436,14 +1655,14 @@ export default function App() {
                           </div>
 
                           <div className="mt-auto pt-12 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40">
-                            <span>{webBook.topic}</span>
+                            <span className="break-words">{webBook.topic}</span>
                             <span>PAGE {titlePageNumber}</span>
                           </div>
                         </section>
 
                         {/* Chapter Page 2: Analysis & Glossary */}
                         {analysisPageNumber !== null && (
-                          <section className="p-16 bg-white border border-[#141414] shadow-sm min-h-[1000px] flex flex-col print:break-inside-avoid print:page-break-after-always">
+                          <section id={`page-${analysisPageNumber}`} data-pdf-page-number={String(analysisPageNumber)} data-pdf-page-kind="analysis" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
                             <div className="flex-1 space-y-12">
                               {renderableSubTopics.length > 0 && (
                                 <div className="space-y-8">
@@ -1531,32 +1750,33 @@ export default function App() {
                             </div>
                           </section>
                         )}
-                      </div>
+                      </React.Fragment>
                     ))}
                   </div>
 
                   {/* Document Footer - Inside export container for inclusion in PDF/Word */}
-                  <div className="p-16 bg-[#F5F5F5] border-t border-[#141414] flex flex-col md:flex-row justify-between items-center gap-8 w-full">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
-                        <CheckCircle2 className="text-green-600" size={20} />
+                  <section id={`page-${finalDocumentPageNumber}`} data-pdf-page-number={String(finalDocumentPageNumber)} data-pdf-page-kind="footer" className="web-book-page p-10 md:p-16 bg-[#F5F5F5] border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[170px] md:min-h-[210px] flex flex-col justify-end gap-4 w-full print:shadow-none print:border-none print:break-inside-avoid">
+                    <div className="flex items-end justify-between gap-4">
+                      <div className="flex items-center gap-4 min-w-0 flex-1">
+                        <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                          <CheckCircle2 className="text-green-600" size={20} />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] uppercase font-bold tracking-widest">Synthesis Verified</span>
+                          <span className="text-[9px] opacity-50 font-mono text-left">Engine v2.5 - Evolutionary Pass Complete</span>
+                        </div>
                       </div>
-                      <div className="flex flex-col">
-                        <span className="text-[10px] uppercase font-bold tracking-widest">Synthesis Verified</span>
-                        <span className="text-[9px] opacity-50 font-mono text-left">Engine v2.5 • Evolutionary Pass Complete</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
                       <a 
                         href="#top"
-                        onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        data-pdf-target-page={1}
                         title="Scroll back to the beginning of the book"
-                        className="text-[10px] uppercase font-bold hover:underline flex items-center gap-2"
+                        className="shrink-0 text-[10px] uppercase font-bold hover:underline inline-flex items-center justify-end gap-2 text-right"
                       >
                         Back to Top
                       </a>
                     </div>
-                  </div>
+                    <div className="text-[10px] font-mono opacity-40">PAGE {finalDocumentPageNumber}</div>
+                  </section>
                 </div>
               </motion.div>
             )}
