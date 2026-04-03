@@ -42,6 +42,9 @@ export interface EvolutionState {
   generation: number;
   population: WebPageGenotype[];
   bestFitness: number;
+  bestInformativeScore?: number;
+  bestAuthorityScore?: number;
+  bestRedundancyPenalty?: number;
   status: 'idle' | 'searching' | 'parsing' | 'evolving' | 'assembling' | 'complete';
   artifacts?: {
     rawSearchResults?: any[];
