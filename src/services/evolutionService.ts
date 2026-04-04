@@ -67,9 +67,9 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 5, delay = 2000): Pr
     const errorMessage = error.message || errorStr || '';
 
     const isRetryable =
-      errorMessage.includes('429') ||
-      errorMessage.includes('quota') ||
-      errorMessage.includes('RESOURCE_EXHAUSTED') ||
+      //errorMessage.includes('429') ||  // commented out as this impede the immediate pass of control to the search-fallback client
+      //errorMessage.includes('quota') || // commented out as this impede the immediate pass of control to the search-fallback client
+      //errorMessage.includes('RESOURCE_EXHAUSTED') || // commented out as this impede the immediate pass of control to the search-fallback client
       errorMessage.includes('500') ||
       errorMessage.includes('503') ||
       errorMessage.includes('INTERNAL') ||
@@ -167,16 +167,18 @@ function classifyGeminiError(error: unknown): SearchFallbackReason | null {
     ? error.toLowerCase()
     : JSON.stringify(error).toLowerCase() + ' ' + String((error as { message?: string })?.message || '').toLowerCase();
 
+  const status = (error as any)?.status;
+
   if (message.includes('gemini_api_key_missing')) {
     return 'missing_api_key';
   }
-  if (message.includes('api_key_invalid') || message.includes('invalid api key') || message.includes('403') || message.includes('401')) {
+  if (message.includes('api_key_invalid') || message.includes('invalid api key') || message.includes('403') || message.includes('401') || status === 401 || status === 403) {
     return 'invalid_api_key';
   }
-  if (message.includes('429') || message.includes('quota') || message.includes('resource_exhausted') || message.includes('rate limit')) {
+  if (message.includes('429') || message.includes('quota') || message.includes('resource_exhausted') || message.includes('rate limit') || status === 429) {
     return 'quota_or_rate_limit';
   }
-  if (message.includes('503') || message.includes('500') || message.includes('service unavailable') || message.includes('internal error')) {
+  if (message.includes('503') || message.includes('500') || message.includes('service unavailable') || message.includes('internal error') || status === 500 || status === 503) {
     return 'service_unavailable';
   }
   return null;
