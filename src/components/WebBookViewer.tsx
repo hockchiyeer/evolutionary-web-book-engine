@@ -14,8 +14,8 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
     : 3;
 
   return (
-    <div className="web-book-container w-full max-w-[900px] space-y-8 overflow-x-hidden print:max-w-none print:space-y-0" id="top">
-      <section id="page-1" data-pdf-page-number="1" data-pdf-page-kind="cover" className="web-book-page bg-[#141414] text-[#E4E3E0] p-16 relative overflow-hidden text-center min-h-[1000px] md:min-h-[1123px] flex flex-col justify-center border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.18)] print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
+    <div className="web-book-container w-full max-w-[900px] space-y-8 overflow-x-hidden print:max-w-none print:space-y-0 print:block print:overflow-visible" id="top">
+      <section id="page-1" data-pdf-page-number="1" data-pdf-page-kind="cover" className="web-book-page bg-[#141414] text-[#E4E3E0] p-16 relative overflow-hidden text-center min-h-[1000px] md:min-h-[1123px] flex flex-col justify-center border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.18)] print:shadow-none print:border-none print:block print:min-h-0 print:h-auto print:page-break-after-always">
         <div className="relative z-10">
           <div className="flex flex-col items-center gap-4 mb-8">
             <div className="w-12 h-12 border-2 border-[#E4E3E0] flex items-center justify-center rotate-45">
@@ -47,7 +47,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
         <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-[10px] font-mono opacity-40">PAGE 1</div>
       </section>
 
-      <section id="page-2" data-pdf-page-number="2" data-pdf-page-kind="toc" className="web-book-page p-12 md:p-20 bg-[#FAFAFA] min-h-[1000px] md:min-h-[1123px] flex flex-col relative border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
+      <section id="page-2" data-pdf-page-number="2" data-pdf-page-kind="toc" className="web-book-page p-12 md:p-20 bg-[#FAFAFA] min-h-[1000px] md:min-h-[1123px] flex flex-col relative border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] print:shadow-none print:border-none print:block print:min-h-0 print:h-auto print:page-break-after-always">
         <h3 className="text-[14px] uppercase font-bold mb-16 tracking-[0.3em] border-b-2 border-[#141414] pb-6 inline-block self-start">Table of Contents</h3>
         <div className="space-y-8 flex-1">
           {chapterRenderPlan.map(({ chapter, titlePageNumber }, index) => (
@@ -70,7 +70,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
 
           return (
             <React.Fragment key={chapter.title + titlePageNumber}>
-              <section id={`page-${titlePageNumber}`} data-pdf-page-number={String(titlePageNumber)} data-pdf-page-kind="chapter" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
+              <section id={`page-${titlePageNumber}`} data-pdf-page-number={String(titlePageNumber)} data-pdf-page-kind="chapter" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:block print:min-h-0 print:h-auto print:page-break-after-always">
                 <div id={`chapter-${index}`} className="absolute top-0 left-0" aria-hidden="true" />
                 <div className="flex items-center justify-between gap-4 mb-12 border-b border-[#141414]/10 pb-6">
                   <div className="flex items-center gap-4 min-w-0">
@@ -137,7 +137,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
               </section>
 
               {analysisPageNumber !== null && (
-                <section id={`page-${analysisPageNumber}`} data-pdf-page-number={String(analysisPageNumber)} data-pdf-page-kind="analysis" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:break-inside-avoid print:page-break-after-always">
+                <section id={`page-${analysisPageNumber}`} data-pdf-page-number={String(analysisPageNumber)} data-pdf-page-kind="analysis" className="web-book-page p-10 md:p-16 bg-white border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[1000px] md:min-h-[1123px] flex flex-col relative print:shadow-none print:border-none print:block print:min-h-0 print:h-auto print:page-break-after-always">
                   <div className="flex-1 space-y-12">
                     {renderableSubTopics.length > 0 && (
                       <div className="space-y-8">
@@ -255,7 +255,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
         })}
       </div>
 
-      <section id={`page-${finalDocumentPageNumber}`} data-pdf-page-number={String(finalDocumentPageNumber)} data-pdf-page-kind="footer" className="web-book-page p-10 md:p-16 bg-[#F5F5F5] border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[170px] md:min-h-[210px] flex flex-col justify-end gap-4 w-full print:shadow-none print:border-none print:break-inside-avoid">
+      <section id={`page-${finalDocumentPageNumber}`} data-pdf-page-number={String(finalDocumentPageNumber)} data-pdf-page-kind="footer" className="web-book-page p-10 md:p-16 bg-[#F5F5F5] border border-[#141414] shadow-[12px_12px_0px_0px_rgba(20,20,20,0.12)] min-h-[170px] md:min-h-[210px] flex flex-col justify-end gap-4 w-full print:shadow-none print:border-none print:block print:min-h-0 print:h-auto">
         <div className="flex items-end justify-between gap-4">
           <div className="flex items-center gap-4 min-w-0 flex-1">
             <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">

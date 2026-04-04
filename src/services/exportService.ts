@@ -305,9 +305,9 @@ export async function exportWebBookToHtml(webBook: WebBook): Promise<void> {
         .web-book-container { width: 100%; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
         .web-book-page { background: white; border: 1px solid #141414; box-shadow: 12px 12px 0 rgba(20, 20, 20, 0.12); overflow: hidden; }
         @media print {
-          body { background: white; padding: 0; }
-          .web-book-container { max-width: none; gap: 0; }
-          .web-book-page { box-shadow: none; break-after: page; page-break-after: always; }
+          body { background: white; padding: 0; overflow: visible !important; }
+          .web-book-container { max-width: none; gap: 0; overflow: visible !important; }
+          .web-book-page { box-shadow: none; break-after: page; page-break-after: always; overflow: visible !important; }
           .web-book-page:last-child { break-after: auto; page-break-after: auto; }
         }
       </style>
@@ -533,13 +533,13 @@ export async function printWebBook(webBook: WebBook): Promise<void> {
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
         <style>
           html { scroll-behavior: smooth; }
-          body { font-family: 'Inter', sans-serif; background: white; padding: 24px 0; margin: 0; overflow-x: hidden; }
+          body { font-family: 'Inter', sans-serif; background: white; padding: 24px 0; margin: 0; }
           .font-serif { font-family: 'Playfair Display', serif; }
           .print\\:hidden { display: none !important; }
           .web-book-container { width: 100%; max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; }
           .web-book-page { background: white; width: 100%; min-height: 100vh; display: flex; flex-direction: column; position: relative; box-sizing: border-box; }
           @media print {
-            body { padding: 0; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            body { padding: 0; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; overflow: visible !important; }
             .no-print { display: none; }
             .web-book-page {
               break-after: page;
@@ -551,6 +551,7 @@ export async function printWebBook(webBook: WebBook): Promise<void> {
               min-height: auto !important;
               height: auto !important;
               box-sizing: border-box !important;
+              overflow: visible !important;
             }
             .web-book-page:last-child { break-after: auto; page-break-after: auto; }
             @page { size: A4; margin: 0; }

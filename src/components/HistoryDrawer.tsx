@@ -66,7 +66,9 @@ export function HistoryDrawer({
                       <button
                         onClick={(event) => {
                           event.stopPropagation();
-                          onDelete(item.id);
+                          if (window.confirm('Are you sure you want to delete this Web-book from your history?')) {
+                            onDelete(item.id);
+                          }
                         }}
                         title="Delete this book from history"
                         className="text-red-600 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 rounded"
@@ -93,7 +95,11 @@ export function HistoryDrawer({
             {history.length > 0 && (
               <div className="p-6 border-t border-[#141414] bg-white">
                 <button
-                  onClick={onClearAll}
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to permanently delete all archived Web-books?')) {
+                      onClearAll();
+                    }
+                  }}
                   title="Permanently delete all archived Web-books"
                   className="w-full py-3 border border-red-600 text-red-600 text-[11px] uppercase font-bold tracking-widest hover:bg-red-600 hover:text-white transition-all"
                 >

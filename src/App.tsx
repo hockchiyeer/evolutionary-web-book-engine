@@ -121,7 +121,7 @@ export default function App() {
                 key="content"
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
-                className="flex flex-col items-center gap-8 pb-20 overflow-x-hidden"
+                className="flex flex-col items-center gap-8 pb-20 overflow-x-hidden print:block print:overflow-visible print:pb-0"
               >
                 <WebBookViewer webBook={webBook} />
               </motion.div>
