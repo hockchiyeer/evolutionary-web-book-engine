@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { EvolutionState, WebBook } from '../types';
-import { assembleWebBook, evolve, searchAndExtract } from '../services/evolutionService';
+import { ASSEMBLY_SOURCE_POOL_SIZE, assembleWebBook, evolve, searchAndExtract } from '../services/evolutionService';
 import {
   clearPersistedSearches,
   completePersistedSearch,
@@ -149,7 +149,7 @@ export function useWebBookEngine() {
         bestRedundancyPenalty: 0,
         artifacts: {
           ...previousState.artifacts,
-          assemblyInput: evolvedPopulation.slice(0, 4),
+          assemblyInput: evolvedPopulation.slice(0, ASSEMBLY_SOURCE_POOL_SIZE),
           assemblyOutput: book,
         },
       }));
@@ -225,3 +225,4 @@ export function useWebBookEngine() {
     clearAllHistory,
   };
 }
+

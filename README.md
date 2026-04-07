@@ -9,6 +9,7 @@ This repository now includes:
 - a modular React frontend under `src/`
 - a Vite middleware fallback route under `server/`
 - Gemini-first generation with automatic search fallback
+- source-pool consolidation that can preserve roughly 40-50 distinct evidence items before assembly
 - deduplication for fallback-derived summaries, chapters, and source evidence
 - export to PDF, print, Word, HTML, and plain text
 
@@ -16,10 +17,12 @@ This repository now includes:
 
 - Accepts a topic query and generates a structured Web-book around that topic.
 - Uses Google Gemini first for search extraction and chapter assembly.
+- Consolidates a broader evidence pool before chapter writing so the generator is not forced to build a 10-chapter book from only a handful of sources.
 - Falls back when Gemini is unavailable, misconfigured, rate-limited, or quota-limited.
 - Builds fallback content from live search evidence instead of hardcoded placeholder text.
-- Tries Google Search AI Overview / Google snippets first, then falls back to DuckDuckGo HTML search snippets if Google blocks automated extraction.
+- Expands live search coverage with Google Search AI Overview, Google snippets, and DuckDuckGo HTML snippets across multiple query variants.
 - Deduplicates repeated fallback snippets, repeated chapter text, and repeated cross-chapter content.
+- Builds an 18-source assembly pool and prunes that into a final 10-chapter Web-book.
 - Renders a cover page, table of contents, chapter spreads, glossary sections, source links, and detailed reading links.
 - Preserves search history in `localStorage`.
 - Optionally syncs completed books to Firebase using Anonymous Auth + Cloud Firestore.
@@ -30,14 +33,16 @@ This repository now includes:
 ### Frontend
 
 - `src/App.tsx` is now a thin page-level orchestrator.
-- `src/hooks/useWebBookEngine.ts` manages the search/evolution/assembly flow and UI state.
+- `src/hooks/useWebBookEngine.ts` manages the search/evolution/assembly flow, carries the expanded assembly input set, and publishes artifact data to the UI.
 - `src/components/` contains the header, sidebar, history drawer, and Web-book viewer.
+- `src/components/ControlSidebar.tsx` shows population size, search coverage summary, evolved population, and assembly trace metrics.
 - `src/services/` contains the evolution pipeline, fallback client, history persistence, and export logic.
 - `src/utils/webBookRender.ts` handles content filtering, render planning, and source-link normalization.
 
 ### Fallback Route
 
 - `server/googleSearchFallback.ts` adds a Vite middleware route at `/api/search-fallback`.
+- The fallback route now expands coverage with multiple query variants and blends distinct Google and DuckDuckGo results into a larger capped source pool.
 - The fallback route is used when Gemini fails due to:
   - missing API key
   - invalid API key
@@ -48,16 +53,18 @@ This repository now includes:
 ## Search And Assembly Pipeline
 
 1. Search and extract with Gemini in `src/services/evolutionService.ts`.
-2. If Gemini fails for a known recoverable reason, request `/api/search-fallback`.
-3. The fallback route attempts:
+2. Enrich Gemini extraction with live search evidence when available so the consolidated source pool can approach roughly 40-50 distinct items.
+3. If Gemini fails for a known recoverable reason, request `/api/search-fallback`.
+4. The fallback route attempts:
    - Google Search AI Overview extraction
    - Google Search snippet extraction
    - DuckDuckGo HTML snippet extraction as an alternate provider
-4. Build a candidate population of source pages.
-5. Score and recombine that population across 3 lightweight evolutionary passes.
-6. Assemble the final Web-book.
-7. Render the book with source verification links and external article links.
-8. Export the result if needed.
+   - multiple search-query variants to widen coverage when one phrasing returns sparse results
+5. Build a deduplicated candidate population of source pages.
+6. Score and recombine that population across 3 lightweight evolutionary passes while preserving a larger population size.
+7. Assemble the final Web-book from an 18-source assembly pool into 10 chapters.
+8. Render the book with source verification links and external article links.
+9. Export the result if needed.
 
 ## Repo Structure
 
@@ -188,6 +195,8 @@ When Gemini cannot be used, the app switches to search-based synthesis:
 - Google Search AI Overview extraction when available
 - Google Search snippets when AI Overview is not extractable
 - DuckDuckGo HTML snippets when Google blocks automated extraction
+- multiple query variants so sparse wording from one search can still contribute to a larger blended result set
+- deduplicated blending of Google and DuckDuckGo evidence up to a much larger capped source pool before assembly
 
 Fallback content is then deduplicated at multiple stages:
 

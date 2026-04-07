@@ -342,7 +342,7 @@ export function ControlSidebar({
 
               {searchSummary && (
                 <div className="space-y-2">
-                  <h4 className="text-amber-300 uppercase font-bold border-l-2 border-amber-300 pl-2">Fallback Search Summary</h4>
+                  <h4 className="text-amber-300 uppercase font-bold border-l-2 border-amber-300 pl-2">Search Coverage Summary</h4>
                   <div className="bg-white/5 p-3 border border-white/10 leading-relaxed text-[11px]">{searchSummary}</div>
                 </div>
               )}
@@ -414,4 +414,5 @@ export function ControlSidebar({
     </div>
   );
 }
+
 

@@ -28,6 +28,9 @@ export interface SearchAndExtractResult {
 
 const GEMINI_MODEL = 'gemini-3-flash-preview';
 const FALLBACK_SOURCE_URL = 'https://www.google.com/search';
+export const CONSOLIDATED_SOURCE_POOL_SIZE = 48;
+export const ASSEMBLY_SOURCE_POOL_SIZE = 18;
+export const FINAL_WEBBOOK_CHAPTER_COUNT = 10;
 const FALLBACK_STOPWORDS = new Set([
   'about',
   'after',
@@ -396,6 +399,84 @@ function buildSearchSummaryFromPopulation(population: WebPageGenotype[], topic: 
   return `Search evidence for ${topic} was gathered, but only a limited amount of extractable text was available.`;
 }
 
+function normalizePopulationText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function selectDistinctPopulationPages(
+  pages: WebPageGenotype[],
+  maxPages = CONSOLIDATED_SOURCE_POOL_SIZE
+): WebPageGenotype[] {
+  const distinct: WebPageGenotype[] = [];
+
+  for (const page of pages) {
+    const candidate: WebPageGenotype = {
+      ...page,
+      title: page.title?.trim() || '',
+      content: normalizePopulationText(page.content || ''),
+      definitions: getRenderableDefinitions(page.definitions || [], 8),
+      subTopics: getRenderableSubTopics(page.subTopics || []).slice(0, 8),
+      informativeScore: Number.isFinite(page.informativeScore) ? page.informativeScore : scoreInformativeText(page.content || ''),
+      authorityScore: Number.isFinite(page.authorityScore) ? page.authorityScore : scoreDomainAuthority(page.url),
+      fitness: Number.isFinite(page.fitness) ? page.fitness : 0,
+    };
+
+    if (!candidate.title || !candidate.content || !candidate.url) {
+      continue;
+    }
+
+    const isDuplicate = distinct.some((existing) => {
+      if (existing.url === candidate.url) {
+        return true;
+      }
+
+      const titleSimilarity = calculateTextSimilarity(existing.title, candidate.title);
+      const contentSimilarity = calculateTextSimilarity(
+        existing.content.slice(0, 900),
+        candidate.content.slice(0, 900)
+      );
+
+      return titleSimilarity >= 0.82
+        || (titleSimilarity >= 0.6 && contentSimilarity >= 0.72)
+        || contentSimilarity >= 0.9;
+    });
+
+    if (isDuplicate) {
+      continue;
+    }
+
+    distinct.push(candidate);
+    if (distinct.length >= maxPages) {
+      break;
+    }
+  }
+
+  return distinct;
+}
+
+function mergeSearchArtifacts(primary: SearchArtifact[], supplemental: SearchArtifact[]): SearchArtifact[] {
+  const merged: SearchArtifact[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const artifact of [...primary, ...supplemental]) {
+    const key = artifact.web?.uri
+      || `${artifact.web?.title || 'untitled'}|${artifact.snippet?.slice(0, 160) || ''}`;
+
+    if (!key || seenKeys.has(key)) {
+      continue;
+    }
+
+    seenKeys.add(key);
+    merged.push(artifact);
+
+    if (merged.length >= CONSOLIDATED_SOURCE_POOL_SIZE) {
+      break;
+    }
+  }
+
+  return merged;
+}
+
 function mapFallbackArtifacts(payload: SearchFallbackPayload): SearchArtifact[] {
   return payload.results.map((result) => ({
     web: {
@@ -408,27 +489,27 @@ function mapFallbackArtifacts(payload: SearchFallbackPayload): SearchArtifact[] 
 
 function buildFallbackPopulation(payload: SearchFallbackPayload): WebPageGenotype[] {
   const searchUrl = buildSearchUrl(payload.query);
-  const distinctResults = selectDistinctFallbackResults(payload.results);
+  const distinctResults = selectDistinctFallbackResults(payload.results, CONSOLIDATED_SOURCE_POOL_SIZE - 1);
   const overviewDefinitions = getRenderableDefinitions([
     {
       term: payload.query,
       description: payload.summary,
       sourceUrl: searchUrl,
     },
-    ...distinctResults.slice(0, 3).map((result) => ({
+    ...distinctResults.slice(0, 6).map((result) => ({
       term: deriveConceptLabel(result.title, payload.query),
       description: result.snippet,
       sourceUrl: result.url,
     })),
-  ]);
+  ], 8);
 
   const overviewSubTopics = getRenderableSubTopics(
-    distinctResults.slice(0, 4).map((result) => ({
+    distinctResults.slice(0, 8).map((result) => ({
       title: result.title,
       summary: result.snippet,
       sourceUrl: result.url,
     }))
-  );
+  ).slice(0, 8);
 
   const overviewPage: WebPageGenotype = {
     id: `fallback-overview-${payload.extractedAt}`,
@@ -442,7 +523,7 @@ function buildFallbackPopulation(payload: SearchFallbackPayload): WebPageGenotyp
     fitness: 0,
   };
 
-  const sourcePages = distinctResults.slice(0, 5).map((result, index) => ({
+  const sourcePages = distinctResults.slice(0, CONSOLIDATED_SOURCE_POOL_SIZE - 1).map((result, index) => ({
     id: `fallback-source-${index}-${payload.extractedAt}`,
     url: result.url,
     title: result.title,
@@ -469,13 +550,45 @@ function buildFallbackPopulation(payload: SearchFallbackPayload): WebPageGenotyp
   return [overviewPage, ...sourcePages];
 }
 
+async function enrichGeminiSearchResult(query: string, geminiResult: SearchAndExtractResult): Promise<SearchAndExtractResult> {
+  const distinctGeminiResults = selectDistinctPopulationPages(geminiResult.results, CONSOLIDATED_SOURCE_POOL_SIZE);
+
+  try {
+    const fallbackPayload = await fetchGoogleSearchFallback(query);
+    const fallbackPopulation = buildFallbackPopulation(fallbackPayload);
+    const enrichedResults = selectDistinctPopulationPages(
+      [...distinctGeminiResults, ...fallbackPopulation],
+      CONSOLIDATED_SOURCE_POOL_SIZE
+    );
+
+    return {
+      ...geminiResult,
+      results: enrichedResults,
+      artifacts: {
+        groundingChunks: mergeSearchArtifacts(geminiResult.artifacts.groundingChunks, mapFallbackArtifacts(fallbackPayload)),
+        searchSummary: fallbackPayload.summary,
+      },
+      generationNote: enrichedResults.length > distinctGeminiResults.length
+        ? `Gemini extraction was enriched with live search evidence, consolidating ${enrichedResults.length} sources before evolution.`
+        : geminiResult.generationNote,
+      fallbackPayload,
+    };
+  } catch (error) {
+    console.warn('Gemini enrichment with live search evidence was unavailable', error);
+    return {
+      ...geminiResult,
+      results: distinctGeminiResults,
+    };
+  }
+}
+
 async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtractResult> {
   const ai = getAI();
 
   const response = await withRetry(() => ai.models.generateContent({
     model: GEMINI_MODEL,
     contents: `Search for comprehensive information about "${query}".
-    Identify 3-5 distinct high-quality web pages or sources.
+    Identify 12-18 distinct high-quality web pages or sources that collectively cover the topic from foundational, practical, historical, and advanced perspectives.
     For each source, extract:
     1. A list of key definitions found on the page.
     2. A list of salient sub-topics discussed.
@@ -486,7 +599,7 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
       systemInstruction: 'You are a precise data extractor. Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array for that source\'s definitions.',
       tools: [{ googleSearch: {} }],
       responseMimeType: 'application/json',
-      maxOutputTokens: 6000,
+      maxOutputTokens: 12000,
       responseSchema: {
         type: Type.ARRAY,
         items: {
@@ -545,14 +658,19 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
     };
   }
 
-  const processedResults = results.map((result: any, index: number) => ({
+  const processedResults = selectDistinctPopulationPages(results.map((result: any, index: number) => ({
     ...result,
     id: `gen-${index}-${Date.now()}`,
-    content: result.content ? String(result.content).substring(0, 2000) : '',
-    definitions: (result.definitions || []).map((definition: any) => ({ ...definition, sourceUrl: result.url })),
-    subTopics: (result.subTopics || []).map((subTopic: any) => ({ ...subTopic, sourceUrl: result.url })),
+    content: result.content ? String(result.content).substring(0, 1600) : '',
+    definitions: getRenderableDefinitions(
+      (result.definitions || []).map((definition: any) => ({ ...definition, sourceUrl: result.url })),
+      8
+    ),
+    subTopics: getRenderableSubTopics(
+      (result.subTopics || []).map((subTopic: any) => ({ ...subTopic, sourceUrl: result.url }))
+    ).slice(0, 8),
     fitness: 0,
-  }));
+  })), ASSEMBLY_SOURCE_POOL_SIZE);
 
   return {
     results: processedResults,
@@ -563,7 +681,8 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
 
 export async function searchAndExtract(query: string): Promise<SearchAndExtractResult> {
   try {
-    return await searchAndExtractWithGemini(query);
+    const geminiResult = await searchAndExtractWithGemini(query);
+    return await enrichGeminiSearchResult(query, geminiResult);
   } catch (error) {
     const fallbackReason = classifyGeminiError(error);
     if (!fallbackReason) {
@@ -607,7 +726,12 @@ export function calculateFitness(
 export const EVOLUTION_WEIGHTS = { alpha: 0.5, beta: 0.3, gamma: 0.2 };
 
 export async function evolve(population: WebPageGenotype[], generations = 3): Promise<WebPageGenotype[]> {
-  let currentPopulation = [...population];
+  let currentPopulation = selectDistinctPopulationPages(population, CONSOLIDATED_SOURCE_POOL_SIZE);
+  const targetPopulationSize = currentPopulation.length;
+
+  if (targetPopulationSize <= 2) {
+    return currentPopulation;
+  }
 
   for (let generation = 0; generation < generations; generation += 1) {
     currentPopulation.forEach((page) => {
@@ -615,52 +739,103 @@ export async function evolve(population: WebPageGenotype[], generations = 3): Pr
     });
 
     currentPopulation.sort((left, right) => right.fitness - left.fitness);
-    const survivors = currentPopulation.slice(0, Math.ceil(currentPopulation.length / 2));
+    const survivors = currentPopulation.slice(0, Math.max(2, Math.ceil(targetPopulationSize / 2)));
 
-    const offspring: WebPageGenotype[] = [];
-    for (let index = 0; index < survivors.length - 1; index += 2) {
-      const parentA = survivors[index];
-      const parentB = survivors[index + 1];
+    const nextPopulation = survivors.map((page) => ({ ...page }));
+    let offspringIndex = 0;
 
-      offspring.push({
-        id: `offspring-${generation}-${index}`,
+    while (nextPopulation.length < targetPopulationSize && survivors.length > 0) {
+      const parentA = survivors[offspringIndex % survivors.length];
+      const parentB = survivors[(offspringIndex + generation + 1) % survivors.length] || parentA;
+      const mergedDefinitions = getRenderableDefinitions([
+        ...(parentA.definitions || []).slice(0, 4),
+        ...(parentB.definitions || []).slice(0, 4),
+      ], 8);
+      const mergedSubTopics = getRenderableSubTopics([
+        ...(parentA.subTopics || []).slice(0, 4),
+        ...(parentB.subTopics || []).slice(0, 4),
+      ]).slice(0, 8);
+      const hybridContent = dedupeSentences(`${parentA.content} ${parentB.content}`, 8).join(' ')
+        || `${parentA.content.substring(0, 500)} ${parentB.content.substring(0, 500)}`.trim();
+
+      nextPopulation.push({
+        id: `offspring-${generation}-${offspringIndex}`,
         url: 'hybrid-source',
         title: `Synthesized: ${parentA.title} & ${parentB.title}`,
-        content: `${parentA.content.substring(0, 500)}... ${parentB.content.substring(0, 500)}...`,
-        definitions: [
-          ...(parentA.definitions || []).slice(0, Math.ceil((parentA.definitions?.length || 0) / 2)),
-          ...(parentB.definitions || []).slice(Math.ceil((parentB.definitions?.length || 0) / 2)),
-        ],
-        subTopics: [
-          ...(parentA.subTopics || []).slice(0, Math.ceil((parentA.subTopics?.length || 0) / 2)),
-          ...(parentB.subTopics || []).slice(Math.ceil((parentB.subTopics?.length || 0) / 2)),
-        ],
+        content: hybridContent,
+        definitions: mergedDefinitions,
+        subTopics: mergedSubTopics,
         informativeScore: (parentA.informativeScore + parentB.informativeScore) / 2,
         authorityScore: (parentA.authorityScore + parentB.authorityScore) / 2,
         fitness: 0,
       });
+
+      offspringIndex += 1;
     }
 
-    currentPopulation = [...survivors, ...offspring];
+    currentPopulation = nextPopulation.slice(0, targetPopulationSize);
   }
+
+  currentPopulation.forEach((page) => {
+    page.fitness = calculateFitness(page, [], EVOLUTION_WEIGHTS);
+  });
+  currentPopulation.sort((left, right) => right.fitness - left.fitness);
 
   return currentPopulation;
 }
 
+type AssemblySourceContext = {
+  title: string;
+  url: string;
+  content: string;
+  definitions: WebPageGenotype['definitions'];
+  subTopics: WebPageGenotype['subTopics'];
+};
+
+function selectRelevantAssemblySources(
+  chapterOutline: { title?: string; focus?: string; terms?: string[]; subTopicTitles?: string[] },
+  sourcePool: AssemblySourceContext[]
+): AssemblySourceContext[] {
+  const chapterQuery = [
+    chapterOutline.title || '',
+    chapterOutline.focus || '',
+    ...(chapterOutline.terms || []),
+    ...(chapterOutline.subTopicTitles || []),
+  ].join(' ');
+
+  return sourcePool
+    .map((source) => {
+      const definitionSummary = source.definitions.map((definition) => `${definition.term} ${definition.description}`).join(' ');
+      const subTopicSummary = source.subTopics.map((subTopic) => `${subTopic.title} ${subTopic.summary}`).join(' ');
+
+      return {
+        source,
+        score:
+          (calculateTextSimilarity(source.title, chapterQuery) * 0.45) +
+          (calculateTextSimilarity(source.content.slice(0, 650), chapterQuery) * 0.35) +
+          (calculateTextSimilarity(`${definitionSummary} ${subTopicSummary}`.slice(0, 650), chapterQuery) * 0.2),
+      };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .map(({ source }) => source);
+}
+
 async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], topic: string): Promise<WebBook> {
   const ai = getAI();
-  const truncatedData = optimalPopulation.slice(0, 5).map((page) => ({
+  const assemblySourcePool = optimalPopulation.slice(0, ASSEMBLY_SOURCE_POOL_SIZE);
+  const truncatedData: AssemblySourceContext[] = assemblySourcePool.map((page) => ({
     title: page.title,
     url: page.url,
-    content: page.content.substring(0, 1000),
-    definitions: page.definitions.slice(0, 4),
-    subTopics: page.subTopics.slice(0, 3),
+    content: page.content.substring(0, 650),
+    definitions: page.definitions.slice(0, 3),
+    subTopics: page.subTopics.slice(0, 2),
   }));
 
   const outlineResponse = await withRetry(() => ai.models.generateContent({
     model: GEMINI_MODEL,
-    contents: `Topic: ${topic}. Data: ${JSON.stringify(truncatedData)}.
-    Create a detailed 12-chapter candidate pool for a comprehensive Web-book.
+    contents: `Topic: ${topic}. Source pool: ${JSON.stringify(truncatedData)}.
+    Create a detailed 18-chapter candidate pool for a comprehensive Web-book.
     For each chapter, provide:
     1. A compelling title.
     2. A brief 2-sentence focus description.
@@ -669,7 +844,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
     5. A visual seed keyword for an image.
     6. A 'priorityScore' (1-100) representing how essential this chapter is to the core topic.`,
     config: {
-      systemInstruction: 'You are a master book architect. Output valid JSON only. Create a 12-chapter candidate pool. This is an evolutionary selection process: some chapters will be pruned later based on quality. Ensure a logical flow from basics to advanced. Assign higher priorityScore to foundational and critical chapters. Strictly avoid placeholders or meaningless text.',
+      systemInstruction: 'You are a master book architect. Output valid JSON only. Create an 18-chapter candidate pool grounded in the supplied source pool. This is an evolutionary selection process: some chapters will be pruned later based on quality. Ensure a logical flow from basics to advanced. Assign higher priorityScore to foundational and critical chapters. Strictly avoid placeholders or meaningless text.',
       responseMimeType: 'application/json',
       maxOutputTokens: 4096,
       responseSchema: {
@@ -708,12 +883,14 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
   for (let index = 0; index < outlineData.outline.length; index += concurrencyLimit) {
     const batch = outlineData.outline.slice(index, index + concurrencyLimit);
     const batchResults = await Promise.all(batch.map(async (chapterOutline: any, batchIndex: number) => {
+      const relevantSources = selectRelevantAssemblySources(chapterOutline, truncatedData);
       const chapterResponse = await withRetry(() => ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Topic: ${topic}. Chapter: ${chapterOutline.title}. Focus: ${chapterOutline.focus}.
+        contents: `Topic: ${topic}. Chapter: ${chapterOutline.title}. Focus: ${chapterOutline.focus}. Source evidence: ${JSON.stringify(relevantSources)}.
         Write a comprehensive, high-quality chapter (approx 350-400 words).
         Also provide detailed definitions for: ${chapterOutline.terms.join(', ')}.
-        And detailed analyses for the sub-topics: ${chapterOutline.subTopicTitles.join(', ')}.`,
+        And detailed analyses for the sub-topics: ${chapterOutline.subTopicTitles.join(', ')}.
+        Ground the chapter in the supplied source evidence, synthesizing it into a cohesive explanation rather than copying snippets.`,
         config: {
           systemInstruction: 'You are an expert technical writer. Output valid JSON only. Be detailed, authoritative, and academic in tone. Ensure all definitions and sub-topic analyses are meaningful, human-readable, and relevant to the chapter. Strictly avoid generating random numbers, long strings of digits, or meaningless placeholder text.',
           responseMimeType: 'application/json',
@@ -764,7 +941,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
         content,
         definitions: filteredDefinitions,
         subTopics: filteredSubTopics,
-        sourceUrls: truncatedData.map((data) => ({ title: data.title, url: data.url })),
+        sourceUrls: (relevantSources.length > 0 ? relevantSources : truncatedData).map((data) => ({ title: data.title, url: data.url })),
         visualSeed: chapterOutline.visualSeed || 'evolution',
         priorityScore: chapterOutline.priorityScore || 50,
         originalIndex: index + batchIndex,
@@ -780,7 +957,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
 
   const selectedChapters = allGeneratedChapters
     .sort((left, right) => right.priorityScore - left.priorityScore)
-    .slice(0, 10)
+    .slice(0, FINAL_WEBBOOK_CHAPTER_COUNT)
     .sort((left, right) => left.originalIndex - right.originalIndex)
     .map(({ priorityScore, originalIndex, ...chapter }) => chapter);
 
@@ -822,8 +999,8 @@ function buildFallbackChapterContent(
   page: WebPageGenotype,
   seenSentences: string[]
 ): { content: string; novelSentences: string[] } {
-  const pageSentences = dedupeSentences(page.content, 4);
-  const novelSentences = filterNovelSentences(pageSentences, seenSentences, 0.84, 4);
+  const pageSentences = dedupeSentences(page.content, 6);
+  const novelSentences = filterNovelSentences(pageSentences, seenSentences, 0.84, 5);
 
   if (novelSentences.length > 0) {
     return {
@@ -919,9 +1096,98 @@ function distinctSourceReferences(sources: Array<{ title: string; url: string }>
   return distinct;
 }
 
+function buildCompositeFallbackChapterTitle(topic: string, results: SearchFallbackResult[], index: number): string {
+  const prefixes = [
+    'Foundations',
+    'Core Themes',
+    'Practical Context',
+    'Comparative Views',
+    'Advanced Perspectives',
+    'Reference Map',
+  ];
+  const labels: string[] = [];
+
+  for (const result of results) {
+    const label = deriveConceptLabel(result.title, topic);
+    if (!label || labels.some((existing) => calculateTextSimilarity(existing, label) >= 0.74)) {
+      continue;
+    }
+
+    labels.push(label);
+    if (labels.length >= 2) {
+      break;
+    }
+  }
+
+  const prefix = prefixes[index % prefixes.length];
+  if (labels.length === 0) {
+    return `${prefix}: ${topic}`;
+  }
+
+  if (labels.length === 1) {
+    return `${prefix}: ${labels[0]}`;
+  }
+
+  return `${prefix}: ${labels[0]} and ${labels[1]}`;
+}
+
+function buildSupplementalFallbackChapters(
+  topic: string,
+  results: SearchFallbackResult[],
+  seenSentences: string[],
+  maxChapters: number
+): WebBook['chapters'] {
+  const chapters: WebBook['chapters'] = [];
+  const chunkSize = 3;
+
+  for (let index = 0; index < results.length && chapters.length < maxChapters; index += chunkSize) {
+    const chunk = results.slice(index, index + chunkSize);
+    const candidateSentences = dedupeSentences(chunk.map((result) => result.snippet).join(' '), 8);
+    const novelSentences = filterNovelSentences(candidateSentences, seenSentences, 0.84, 5);
+    const content = novelSentences.join(' ');
+
+    if (!content) {
+      continue;
+    }
+
+    seenSentences.push(...novelSentences);
+
+    chapters.push({
+      title: buildCompositeFallbackChapterTitle(topic, chunk, chapters.length),
+      content,
+      definitions: getRenderableDefinitions([
+        {
+          term: topic,
+          description: content,
+          sourceUrl: buildSearchUrl(topic),
+        },
+        ...chunk.map((result) => ({
+          term: deriveConceptLabel(result.title, topic),
+          description: result.snippet,
+          sourceUrl: result.url,
+        })),
+      ], 5),
+      subTopics: getRenderableSubTopics(
+        chunk.map((result) => ({
+          title: result.title,
+          summary: result.snippet,
+          sourceUrl: result.url,
+        }))
+      ).slice(0, 4),
+      sourceUrls: distinctSourceReferences(
+        chunk.map((result) => ({ title: result.title, url: result.url })),
+        5
+      ),
+      visualSeed: deriveConceptLabel(chunk[0]?.title || topic, topic),
+    });
+  }
+
+  return chapters;
+}
+
 function selectDistinctFallbackPages(
   pages: WebPageGenotype[],
-  maxPages = 4
+  maxPages = ASSEMBLY_SOURCE_POOL_SIZE
 ): WebPageGenotype[] {
   const distinct: WebPageGenotype[] = [];
   const seenSentences: string[] = [];
@@ -971,20 +1237,25 @@ function createFallbackWebBook(
 ): WebBook {
   const rawSummary = sanitizeFallbackSnippet(fallbackPayload?.summary || buildSearchSummaryFromPopulation(optimalPopulation, topic));
   const searchUrl = buildSearchUrl(topic);
-  const distinctFallbackResults = fallbackPayload ? selectDistinctFallbackResults(fallbackPayload.results) : [];
+  const distinctFallbackResults = fallbackPayload
+    ? selectDistinctFallbackResults(fallbackPayload.results, CONSOLIDATED_SOURCE_POOL_SIZE)
+    : [];
   const referenceSources = distinctSourceReferences(
     distinctFallbackResults.map((result) => ({ title: result.title, url: result.url })),
-    5
+    8
   );
   const payloadPages = fallbackPayload ? buildFallbackPopulation({ ...fallbackPayload, results: distinctFallbackResults }).slice(1) : [];
-  const populationPages = optimalPopulation.filter((page) => !isSyntheticPage(page) && page.url !== searchUrl);
-  const candidatePages = [
+  const populationPages = selectDistinctPopulationPages(
+    optimalPopulation.filter((page) => !isSyntheticPage(page) && page.url !== searchUrl),
+    CONSOLIDATED_SOURCE_POOL_SIZE
+  );
+  const candidatePages = selectDistinctPopulationPages([
     ...payloadPages,
     ...populationPages.filter((page) => !payloadPages.some((payloadPage) => payloadPage.url === page.url)),
-  ];
+  ], ASSEMBLY_SOURCE_POOL_SIZE - 1);
   const chapterPages = selectDistinctFallbackPages(
     candidatePages,
-    4
+    ASSEMBLY_SOURCE_POOL_SIZE - 1
   );
   const uncoveredResults = distinctFallbackResults.filter(
     (result) => !chapterPages.some((page) => page.url === result.url)
@@ -1018,27 +1289,38 @@ function createFallbackWebBook(
         sourceUrl: result.url,
       })),
     ]).slice(0, 6),
-    sourceUrls: distinctSourceReferences([...referenceSources, { title: 'Google Search', url: searchUrl }], 5),
+    sourceUrls: distinctSourceReferences([...referenceSources, { title: 'Google Search', url: searchUrl }], 6),
     visualSeed: topic,
   };
 
-  const chapters = chapterPages
+  const sourceChapters = chapterPages
     .map((page) => ({
       title: page.title,
       content: page.content,
-      definitions: getRenderableDefinitions(page.definitions || [], 4),
+      definitions: getRenderableDefinitions(page.definitions || [], 5),
       subTopics: getRenderableSubTopics(page.subTopics || []).slice(0, 4),
       sourceUrls: distinctSourceReferences(
         [{ title: page.title, url: page.url }, ...referenceSources.filter((source) => source.url !== page.url)],
-        3
+        5
       ),
       visualSeed: deriveConceptLabel(page.title, topic),
     }))
     .filter((chapter) => chapter.content && chapter.content.trim().length > 0);
+  const chapterPool = [synthesisChapter, ...sourceChapters];
+  const seenChapterSentences = dedupeSentences(
+    chapterPool.map((chapter) => chapter.content).join(' '),
+    120
+  );
+  const supplementalChapters = buildSupplementalFallbackChapters(
+    topic,
+    uncoveredResults,
+    seenChapterSentences,
+    Math.max(0, ASSEMBLY_SOURCE_POOL_SIZE - chapterPool.length)
+  );
 
   return {
     topic,
-    chapters: [synthesisChapter, ...chapters],
+    chapters: [...chapterPool, ...supplementalChapters].slice(0, FINAL_WEBBOOK_CHAPTER_COUNT),
     id: `book-${Date.now()}`,
     timestamp: Date.now(),
     sourceMode: 'search-fallback',

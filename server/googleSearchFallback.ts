@@ -5,8 +5,17 @@ import type { SearchFallbackPayload, SearchFallbackProvider, SearchFallbackResul
 const SEARCH_FALLBACK_ROUTE = '/api/search-fallback';
 const GOOGLE_SEARCH_URL = 'https://www.google.com/search';
 const DUCKDUCKGO_SEARCH_URL = 'https://html.duckduckgo.com/html/';
-const MAX_RESULTS = 6;
-const MAX_SUMMARY_LENGTH = 1400;
+const MAX_RESULTS = 48;
+const MAX_RESULTS_PER_DOCUMENT = 12;
+const MAX_SUMMARY_LENGTH = 2200;
+const SEARCH_QUERY_VARIANTS = [
+  '',
+  'overview',
+  'guide',
+  'key concepts',
+  'applications',
+  'history',
+];
 const FALLBACK_STOPWORDS = new Set([
   'about',
   'after',
@@ -113,6 +122,32 @@ function collapseWhitespace(input: string): string {
   return input.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function buildSearchQueryVariants(query: string): string[] {
+  const baseQuery = collapseWhitespace(query);
+  const normalizedBase = normalizeComparableText(baseQuery);
+  const variants: string[] = [];
+  const seen = new Set<string>();
+
+  for (const suffix of SEARCH_QUERY_VARIANTS) {
+    const candidate = suffix
+      ? `${baseQuery} ${suffix}`
+      : baseQuery;
+    const normalizedCandidate = normalizeComparableText(candidate);
+
+    if (!normalizedCandidate || seen.has(normalizedCandidate)) {
+      continue;
+    }
+
+    if (suffix !== '' && normalizedCandidate === normalizedBase) {
+      continue;
+    }
+
+    seen.add(normalizedCandidate);
+    variants.push(candidate);
+  }
+
+  return variants.length > 0 ? variants : [baseQuery];
+}
 function normalizeComparableText(input: string): string {
   return collapseWhitespace(
     input
@@ -296,7 +331,7 @@ function extractSearchResultsFromGoogleHtml(html: string): SearchFallbackResult[
   const results: SearchFallbackResult[] = [];
 
   let match: RegExpExecArray | null;
-  while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS) {
+  while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS_PER_DOCUMENT) {
     const url = normalizeGoogleSearchHref(match[1]);
     if (!url || !isExternalResultUrl(url) || seenUrls.has(url)) {
       continue;
@@ -337,7 +372,7 @@ function extractSearchResultsFromDuckDuckGoHtml(html: string): SearchFallbackRes
   const results: SearchFallbackResult[] = [];
 
   let match: RegExpExecArray | null;
-  while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS) {
+  while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS_PER_DOCUMENT) {
     const url = normalizeDuckDuckGoHref(match[1]);
     if (!url || !isExternalResultUrl(url) || seenUrls.has(url)) {
       continue;
@@ -527,12 +562,12 @@ async function fetchSearchHtml(url: URL, label: string, headers: Record<string, 
   };
 }
 
-async function fetchGoogleAttempts(query: string): Promise<SearchFetchResult[]> {
+async function fetchGoogleAttempts(query: string, labelSuffix: string): Promise<SearchFetchResult[]> {
   const desktopUrl = new URL(GOOGLE_SEARCH_URL);
   desktopUrl.searchParams.set('q', query);
   desktopUrl.searchParams.set('hl', 'en');
   desktopUrl.searchParams.set('gl', 'us');
-  desktopUrl.searchParams.set('num', '10');
+  desktopUrl.searchParams.set('num', '12');
   desktopUrl.searchParams.set('pws', '0');
 
   const basicUrl = new URL(desktopUrl.toString());
@@ -542,26 +577,24 @@ async function fetchGoogleAttempts(query: string): Promise<SearchFetchResult[]> 
   webOnlyUrl.searchParams.set('udm', '14');
 
   const attempts = await Promise.allSettled([
-    fetchSearchHtml(desktopUrl, 'google-desktop'),
-    fetchSearchHtml(basicUrl, 'google-basic'),
-    fetchSearchHtml(webOnlyUrl, 'google-web'),
+    fetchSearchHtml(desktopUrl, `google-desktop-${labelSuffix}`),
+    fetchSearchHtml(basicUrl, `google-basic-${labelSuffix}`),
+    fetchSearchHtml(webOnlyUrl, `google-web-${labelSuffix}`),
   ]);
 
   return attempts.flatMap((attempt) => attempt.status === 'fulfilled' ? [attempt.value] : []);
 }
-
-async function fetchDuckDuckGoAttempt(query: string): Promise<SearchFetchResult | null> {
+async function fetchDuckDuckGoAttempt(query: string, labelSuffix: string): Promise<SearchFetchResult | null> {
   const searchUrl = new URL(DUCKDUCKGO_SEARCH_URL);
   searchUrl.searchParams.set('q', query);
   searchUrl.searchParams.set('kl', 'us-en');
 
   try {
-    return await fetchSearchHtml(searchUrl, 'duckduckgo-html');
+    return await fetchSearchHtml(searchUrl, `duckduckgo-html-${labelSuffix}`);
   } catch {
     return null;
   }
 }
-
 function buildDiagnostics(fetches: SearchFetchResult[], resultsCount: number, provider: SearchFallbackProvider): string[] {
   const diagnostics = fetches.map((attempt) => {
     const blockedNote = provider === 'google' && isGoogleBlockedPage(attempt.html) ? ' blocked-by-google' : '';
@@ -573,8 +606,12 @@ function buildDiagnostics(fetches: SearchFetchResult[], resultsCount: number, pr
 }
 
 export async function buildGoogleSearchFallbackPayload(query: string): Promise<SearchFallbackPayload> {
-  const googleAttempts = await fetchGoogleAttempts(query);
-  const aiOverview = googleAttempts.flatMap((attempt) => extractAiOverview(attempt.html));
+  const queryVariants = buildSearchQueryVariants(query);
+  const googleAttemptGroups = await Promise.all(
+    queryVariants.map((variant, index) => fetchGoogleAttempts(variant, `q${index + 1}`))
+  );
+  const googleAttempts = googleAttemptGroups.flat();
+  const aiOverview = googleAttemptGroups[0]?.flatMap((attempt) => extractAiOverview(attempt.html)) || [];
   const googleResults = selectDistinctSearchResults(googleAttempts
     .flatMap((attempt) => extractSearchResultsFromGoogleHtml(attempt.html))
     .reduce<SearchFallbackResult[]>((accumulator, result) => {
@@ -586,28 +623,47 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
       return accumulator;
     }, []));
 
-  if (aiOverview.length > 0 || googleResults.length > 0) {
+  let duckDuckGoAttempts: SearchFetchResult[] = [];
+  let alternateResults: SearchFallbackResult[] = [];
+
+  if (googleResults.length < MAX_RESULTS) {
+    const duckDuckGoAttemptResults = await Promise.all(
+      queryVariants.map((variant, index) => fetchDuckDuckGoAttempt(variant, `q${index + 1}`))
+    );
+    duckDuckGoAttempts = duckDuckGoAttemptResults.filter((attempt): attempt is SearchFetchResult => Boolean(attempt));
+    alternateResults = selectDistinctSearchResults(
+      duckDuckGoAttempts.flatMap((attempt) => extractSearchResultsFromDuckDuckGoHtml(attempt.html)),
+      MAX_RESULTS
+    );
+  }
+
+  const blendedResults = selectDistinctSearchResults(
+    [...googleResults, ...alternateResults],
+    MAX_RESULTS
+  );
+
+  if (aiOverview.length > 0 || blendedResults.length > 0) {
+    const diagnostics = buildDiagnostics(googleAttempts, googleResults.length, 'google');
+    if (duckDuckGoAttempts.length > 0) {
+      diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
+    }
+
     return {
       query,
       source: aiOverview.length > 0 ? 'google-ai-overview' : 'google-search-snippets',
       provider: 'google',
-      summary: buildSummary(query, aiOverview, googleResults),
+      summary: buildSummary(query, aiOverview, blendedResults),
       aiOverview,
-      results: googleResults,
+      results: blendedResults,
       extractedAt: Date.now(),
-      diagnostics: buildDiagnostics(googleAttempts, googleResults.length, 'google'),
+      diagnostics,
     };
   }
 
-  const duckDuckGoAttempt = await fetchDuckDuckGoAttempt(query);
-  const alternateResults = duckDuckGoAttempt
-    ? selectDistinctSearchResults(extractSearchResultsFromDuckDuckGoHtml(duckDuckGoAttempt.html))
-    : [];
-
   if (alternateResults.length > 0) {
     const diagnostics = buildDiagnostics(googleAttempts, googleResults.length, 'google');
-    if (duckDuckGoAttempt) {
-      diagnostics.push(...buildDiagnostics([duckDuckGoAttempt], alternateResults.length, 'duckduckgo'));
+    if (duckDuckGoAttempts.length > 0) {
+      diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
     }
 
     return {
@@ -623,15 +679,14 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
   }
 
   const diagnostics = buildDiagnostics(googleAttempts, googleResults.length, 'google');
-  if (duckDuckGoAttempt) {
-    diagnostics.push(...buildDiagnostics([duckDuckGoAttempt], alternateResults.length, 'duckduckgo'));
+  if (duckDuckGoAttempts.length > 0) {
+    diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
   } else {
     diagnostics.push('duckduckgo-html:fetch-failed');
   }
 
   throw new Error(`No extractable search snippets were available. ${diagnostics.join(' | ')}`);
 }
-
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.statusCode = statusCode;
   response.setHeader('content-type', 'application/json; charset=utf-8');
@@ -688,4 +743,5 @@ export function googleSearchFallbackPlugin(): Plugin {
     },
   };
 }
+
 
