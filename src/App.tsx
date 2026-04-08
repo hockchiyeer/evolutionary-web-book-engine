@@ -9,7 +9,8 @@ import { BookOpen, Dna, Loader2 } from 'lucide-react';
 import { AppHeader } from './components/AppHeader';
 import { ControlSidebar } from './components/ControlSidebar';
 import { HistoryDrawer } from './components/HistoryDrawer';
-import { WebBookViewer } from './components/WebBookViewer';
+import { WebBookViewer } from './WebBookViewer';
+import { WebBookErrorBoundary } from './WebBookErrorBoundary';
 import { useWebBookEngine } from './hooks/useWebBookEngine';
 import {
   exportWebBookToHtml,
@@ -123,7 +124,9 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1 }}
                 className="flex flex-col items-center gap-8 pb-20 overflow-x-hidden print:block print:overflow-visible print:pb-0"
               >
-                <WebBookViewer webBook={webBook} />
+                <WebBookErrorBoundary>
+                  <WebBookViewer webBook={webBook} />
+                </WebBookErrorBoundary>
               </motion.div>
             )}
           </AnimatePresence>

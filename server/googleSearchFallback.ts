@@ -5,6 +5,7 @@ import type { SearchFallbackPayload, SearchFallbackProvider, SearchFallbackResul
 const SEARCH_FALLBACK_ROUTE = '/api/search-fallback';
 const GOOGLE_SEARCH_URL = 'https://www.google.com/search';
 const DUCKDUCKGO_SEARCH_URL = 'https://html.duckduckgo.com/html/';
+const DUCKDUCKGO_INSTANT_ANSWER_URL = 'https://api.duckduckgo.com/';
 const MAX_RESULTS = 48;
 const MAX_RESULTS_PER_DOCUMENT = 12;
 const MAX_SUMMARY_LENGTH = 2200;
@@ -259,7 +260,14 @@ function normalizeDuckDuckGoHref(rawHref: string): string | null {
     const url = new URL(decodedHref, 'https://duckduckgo.com');
 
     if (url.hostname.endsWith('duckduckgo.com') && url.pathname === '/l/') {
-      return url.searchParams.get('uddg');
+      const target = url.searchParams.get('uddg');
+      if (!target) return null;
+
+      try {
+        return decodeURIComponent(target);
+      } catch {
+        return target;
+      }
     }
 
     if (url.protocol === 'http:' || url.protocol === 'https:') {
@@ -367,43 +375,120 @@ function extractSearchResultsFromGoogleHtml(html: string): SearchFallbackResult[
 }
 
 function extractSearchResultsFromDuckDuckGoHtml(html: string): SearchFallbackResult[] {
-  const anchorPattern = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const anchorPatterns = [
+    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]*class="[^"]*result-link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]*href="([^"]*uddg=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  ];
   const seenUrls = new Set<string>();
   const results: SearchFallbackResult[] = [];
 
-  let match: RegExpExecArray | null;
-  while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS_PER_DOCUMENT) {
-    const url = normalizeDuckDuckGoHref(match[1]);
-    if (!url || !isExternalResultUrl(url) || seenUrls.has(url)) {
-      continue;
-    }
+  for (const anchorPattern of anchorPatterns) {
+    let match: RegExpExecArray | null;
+    while ((match = anchorPattern.exec(html)) !== null && results.length < MAX_RESULTS_PER_DOCUMENT) {
+      const url = normalizeDuckDuckGoHref(match[1]);
+      if (!url || !isExternalResultUrl(url) || seenUrls.has(url)) {
+        continue;
+      }
 
-    const title = stripHtmlToText(match[2]);
-    if (!isLikelyResultTitle(title)) {
-      continue;
-    }
+      const title = stripHtmlToText(match[2]);
+      if (!isLikelyResultTitle(title)) {
+        continue;
+      }
 
-    const contextHtml = html.slice(match.index, match.index + 2800);
-    const snippet = extractSnippetFromContext(contextHtml, title);
-    if (snippet.length < 40) {
-      continue;
-    }
+      const contextHtml = html.slice(match.index, match.index + 2800);
+      const snippet = extractSnippetFromContext(contextHtml, title);
+      if (snippet.length < 40) {
+        continue;
+      }
 
-    try {
-      const parsedUrl = new URL(url);
-      results.push({
-        title,
-        url,
-        domain: parsedUrl.hostname.replace(/^www\./, ''),
-        snippet,
-      });
-      seenUrls.add(url);
-    } catch {
-      // Ignore malformed URLs.
+      try {
+        const parsedUrl = new URL(url);
+        results.push({
+          title,
+          url,
+          domain: parsedUrl.hostname.replace(/^www\./, ''),
+          snippet,
+        });
+        seenUrls.add(url);
+      } catch {
+        // Ignore malformed URLs.
+      }
     }
   }
 
   return results;
+}
+
+function collectInstantAnswerTopics(topics: any[]): Array<{ text: string; firstUrl: string }> {
+  const collected: Array<{ text: string; firstUrl: string }> = [];
+
+  for (const topic of topics || []) {
+    if (!topic || typeof topic !== 'object') {
+      continue;
+    }
+
+    if (Array.isArray(topic.Topics)) {
+      collected.push(...collectInstantAnswerTopics(topic.Topics));
+      continue;
+    }
+
+    const text = collapseWhitespace(String(topic.Text || ''));
+    const firstUrl = String(topic.FirstURL || '');
+    if (!text || !firstUrl) {
+      continue;
+    }
+
+    collected.push({ text, firstUrl });
+  }
+
+  return collected;
+}
+
+function extractSearchResultsFromDuckDuckGoInstantAnswer(payload: any): SearchFallbackResult[] {
+  const candidates: SearchFallbackResult[] = [];
+  const pushCandidate = (title: string, url: string, snippet: string) => {
+    if (!title || !url || !snippet || !isExternalResultUrl(url)) {
+      return;
+    }
+
+    try {
+      const parsed = new URL(url);
+      candidates.push({
+        title: collapseWhitespace(title).slice(0, 180),
+        url: parsed.toString(),
+        domain: parsed.hostname.replace(/^www\./, ''),
+        snippet: collapseWhitespace(snippet).slice(0, 420),
+      });
+    } catch {
+      // Ignore malformed URLs.
+    }
+  };
+
+  const abstractText = collapseWhitespace(String(payload?.AbstractText || ''));
+  const abstractUrl = String(payload?.AbstractURL || '');
+  const heading = collapseWhitespace(String(payload?.Heading || ''));
+  if (abstractText.length >= 40 && abstractUrl) {
+    pushCandidate(heading || 'DuckDuckGo Instant Answer', abstractUrl, abstractText);
+  }
+
+  const definition = collapseWhitespace(String(payload?.Definition || ''));
+  const definitionUrl = String(payload?.DefinitionURL || '');
+  const entity = collapseWhitespace(String(payload?.Entity || ''));
+  if (definition.length >= 40 && definitionUrl) {
+    pushCandidate(entity || heading || 'DuckDuckGo Definition', definitionUrl, definition);
+  }
+
+  const relatedTopics = collectInstantAnswerTopics(payload?.RelatedTopics || []);
+  relatedTopics.slice(0, MAX_RESULTS_PER_DOCUMENT).forEach((topic) => {
+    if (topic.text.length < 40) return;
+
+    const title = topic.text.split(/[-|:]/)[0]?.trim() || heading || 'DuckDuckGo Topic';
+    pushCandidate(title, topic.firstUrl, topic.text);
+  });
+
+  return selectDistinctSearchResults(candidates, MAX_RESULTS_PER_DOCUMENT);
 }
 
 function extractAiOverview(html: string): string[] {
@@ -505,6 +590,22 @@ function selectDistinctSearchResults(results: SearchFallbackResult[], maxResults
   return distinct;
 }
 
+function interleaveSearchResults(primary: SearchFallbackResult[], secondary: SearchFallbackResult[]): SearchFallbackResult[] {
+  const interleaved: SearchFallbackResult[] = [];
+  const maxLength = Math.max(primary.length, secondary.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    if (primary[index]) {
+      interleaved.push(primary[index]);
+    }
+    if (secondary[index]) {
+      interleaved.push(secondary[index]);
+    }
+  }
+
+  return interleaved;
+}
+
 function buildSummary(query: string, aiOverview: string[], results: SearchFallbackResult[]): string {
   if (aiOverview.length > 0) {
     return sanitizeFallbackSnippet(aiOverview.join(' ')).slice(0, MAX_SUMMARY_LENGTH);
@@ -595,6 +696,35 @@ async function fetchDuckDuckGoAttempt(query: string, labelSuffix: string): Promi
     return null;
   }
 }
+
+async function fetchDuckDuckGoInstantAnswer(query: string): Promise<{ status: number; results: SearchFallbackResult[] } | null> {
+  const endpoint = new URL(DUCKDUCKGO_INSTANT_ANSWER_URL);
+  endpoint.searchParams.set('q', query);
+  endpoint.searchParams.set('format', 'json');
+  endpoint.searchParams.set('no_html', '1');
+  endpoint.searchParams.set('skip_disambig', '1');
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        accept: 'application/json',
+        'accept-language': 'en-US,en;q=0.9',
+        'cache-control': 'no-cache',
+        'user-agent': DEFAULT_HEADERS['user-agent'],
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const payload = await response.json();
+    return {
+      status: response.status,
+      results: extractSearchResultsFromDuckDuckGoInstantAnswer(payload),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function buildDiagnostics(fetches: SearchFetchResult[], resultsCount: number, provider: SearchFallbackProvider): string[] {
   const diagnostics = fetches.map((attempt) => {
     const blockedNote = provider === 'google' && isGoogleBlockedPage(attempt.html) ? ' blocked-by-google' : '';
@@ -626,19 +756,26 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
   let duckDuckGoAttempts: SearchFetchResult[] = [];
   let alternateResults: SearchFallbackResult[] = [];
 
-  if (googleResults.length < MAX_RESULTS) {
-    const duckDuckGoAttemptResults = await Promise.all(
-      queryVariants.map((variant, index) => fetchDuckDuckGoAttempt(variant, `q${index + 1}`))
-    );
-    duckDuckGoAttempts = duckDuckGoAttemptResults.filter((attempt): attempt is SearchFetchResult => Boolean(attempt));
+  const duckDuckGoAttemptResults = await Promise.all(
+    queryVariants.map((variant, index) => fetchDuckDuckGoAttempt(variant, `q${index + 1}`))
+  );
+  duckDuckGoAttempts = duckDuckGoAttemptResults.filter((attempt): attempt is SearchFetchResult => Boolean(attempt));
+  alternateResults = selectDistinctSearchResults(
+    duckDuckGoAttempts.flatMap((attempt) => extractSearchResultsFromDuckDuckGoHtml(attempt.html)),
+    MAX_RESULTS
+  );
+  const duckDuckGoInstantAnswer = alternateResults.length > 0
+    ? null
+    : await fetchDuckDuckGoInstantAnswer(query);
+  if (duckDuckGoInstantAnswer && duckDuckGoInstantAnswer.results.length > 0) {
     alternateResults = selectDistinctSearchResults(
-      duckDuckGoAttempts.flatMap((attempt) => extractSearchResultsFromDuckDuckGoHtml(attempt.html)),
+      [...alternateResults, ...duckDuckGoInstantAnswer.results],
       MAX_RESULTS
     );
   }
 
   const blendedResults = selectDistinctSearchResults(
-    [...googleResults, ...alternateResults],
+    interleaveSearchResults(googleResults, alternateResults),
     MAX_RESULTS
   );
 
@@ -646,6 +783,10 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
     const diagnostics = buildDiagnostics(googleAttempts, googleResults.length, 'google');
     if (duckDuckGoAttempts.length > 0) {
       diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
+    }
+    if (duckDuckGoInstantAnswer) {
+      diagnostics.push(`duckduckgo-instant:${duckDuckGoInstantAnswer.status}`);
+      diagnostics.push(`duckduckgo-instant-results:${duckDuckGoInstantAnswer.results.length}`);
     }
 
     return {
@@ -665,6 +806,10 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
     if (duckDuckGoAttempts.length > 0) {
       diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
     }
+    if (duckDuckGoInstantAnswer) {
+      diagnostics.push(`duckduckgo-instant:${duckDuckGoInstantAnswer.status}`);
+      diagnostics.push(`duckduckgo-instant-results:${duckDuckGoInstantAnswer.results.length}`);
+    }
 
     return {
       query,
@@ -683,6 +828,12 @@ export async function buildGoogleSearchFallbackPayload(query: string): Promise<S
     diagnostics.push(...buildDiagnostics(duckDuckGoAttempts, alternateResults.length, 'duckduckgo'));
   } else {
     diagnostics.push('duckduckgo-html:fetch-failed');
+  }
+  if (duckDuckGoInstantAnswer) {
+    diagnostics.push(`duckduckgo-instant:${duckDuckGoInstantAnswer.status}`);
+    diagnostics.push(`duckduckgo-instant-results:${duckDuckGoInstantAnswer.results.length}`);
+  } else {
+    diagnostics.push('duckduckgo-instant:fetch-failed');
   }
 
   throw new Error(`No extractable search snippets were available. ${diagnostics.join(' | ')}`);
@@ -743,5 +894,7 @@ export function googleSearchFallbackPlugin(): Plugin {
     },
   };
 }
+
+
 
 

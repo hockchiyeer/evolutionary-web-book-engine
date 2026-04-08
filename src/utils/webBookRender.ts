@@ -1,4 +1,4 @@
-import { Chapter } from "../types";
+import { Chapter, WebBookSourceMode } from "../types";
 
 const POISON_KEYWORDS = [
   "copyright",
@@ -28,6 +28,9 @@ const POISON_KEYWORDS = [
 
 const REPEATED_SUBSTRING_PATTERN = /(.{4,})\1{2,}/;
 const ASSEMBLY_HEURISTIC = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea|cmp)\b/i;
+const MIN_CHAPTER_TEXT_PAGES = 3;
+const SEARCH_FALLBACK_TEXT_PAGES = 1;
+const TARGET_WORDS_PER_TEXT_PAGE = 250;
 
 type DefinitionLike = {
   term?: string | null;
@@ -39,10 +42,17 @@ type SubTopicLike = {
   summary?: string | null;
 };
 
+export interface ChapterNarrativePage {
+  pageNumber: number;
+  content: string;
+  pageKind: "opening" | "analysis" | "synthesis";
+}
+
 export interface ChapterRenderPlan {
   chapter: Chapter;
   titlePageNumber: number;
-  analysisPageNumber: number | null;
+  textPages: ChapterNarrativePage[];
+  glossaryPageNumber: number;
   renderableDefinitions: Chapter["definitions"];
   renderableSubTopics: Chapter["subTopics"];
 }
@@ -52,6 +62,17 @@ export interface NormalizedSourceLink {
   url: string;
   hostname: string;
   isSearchResultsPage: boolean;
+}
+
+function normalizeChapterForRender(chapter: Chapter): Chapter {
+  return {
+    title: typeof chapter?.title === "string" && chapter.title.trim() ? chapter.title.trim() : "Untitled Chapter",
+    content: typeof chapter?.content === "string" ? chapter.content : "",
+    definitions: Array.isArray(chapter?.definitions) ? chapter.definitions : [],
+    subTopics: Array.isArray(chapter?.subTopics) ? chapter.subTopics : [],
+    sourceUrls: Array.isArray(chapter?.sourceUrls) ? chapter.sourceUrls : [],
+    visualSeed: typeof chapter?.visualSeed === "string" && chapter.visualSeed.trim() ? chapter.visualSeed.trim() : "knowledge",
+  };
 }
 
 export function isMeaningfulText(text?: string | null, description = ""): boolean {
@@ -159,26 +180,205 @@ export function getRenderableSubTopics<T extends SubTopicLike>(subTopics: T[] = 
   });
 }
 
-export function buildChapterRenderPlan(chapters: Chapter[]): ChapterRenderPlan[] {
-  // Page 1 is the cover and page 2 is the table of contents.
-  let nextPageNumber = 3;
+function countWords(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
 
-  return chapters.map((chapter) => {
-    const renderableDefinitions = getRenderableDefinitions(chapter.definitions || [], 6);
-    const renderableSubTopics = getRenderableSubTopics(chapter.subTopics || []);
-    const titlePageNumber = nextPageNumber;
-    nextPageNumber += 1;
+function splitIntoSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
 
-    const hasAnalysisPage = renderableDefinitions.length > 0 || renderableSubTopics.length > 0;
-    const analysisPageNumber = hasAnalysisPage ? nextPageNumber : null;
-    if (hasAnalysisPage) {
-      nextPageNumber += 1;
+function splitParagraphIntoTwo(paragraph: string): string[] {
+  const normalized = paragraph.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const sentences = splitIntoSentences(normalized);
+  if (sentences.length >= 4) {
+    const midpoint = Math.ceil(sentences.length / 2);
+    return [
+      sentences.slice(0, midpoint).join(" ").trim(),
+      sentences.slice(midpoint).join(" ").trim(),
+    ].filter(Boolean);
+  }
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length >= 30) {
+    const midpoint = Math.ceil(words.length / 2);
+    return [
+      words.slice(0, midpoint).join(" ").trim(),
+      words.slice(midpoint).join(" ").trim(),
+    ].filter(Boolean);
+  }
+
+  return [normalized];
+}
+
+function ensureMinimumParagraphs(paragraphs: string[], minimumParagraphs: number): string[] {
+  const result = paragraphs
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  let safetyCounter = 0;
+  while (result.length < minimumParagraphs && safetyCounter < 16) {
+    safetyCounter += 1;
+
+    let longestIndex = -1;
+    let longestWordCount = -1;
+
+    result.forEach((paragraph, index) => {
+      const wordCount = countWords(paragraph);
+      if (wordCount > longestWordCount) {
+        longestWordCount = wordCount;
+        longestIndex = index;
+      }
+    });
+
+    if (longestIndex === -1) {
+      break;
     }
+
+    const splitParagraph = splitParagraphIntoTwo(result[longestIndex]);
+    if (splitParagraph.length < 2) {
+      break;
+    }
+
+    result.splice(longestIndex, 1, ...splitParagraph);
+  }
+
+  return result;
+}
+
+function normalizeChapterParagraphs(content: string, minimumParagraphs = MIN_CHAPTER_TEXT_PAGES): string[] {
+  const normalized = content.replace(/\r/g, "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const explicitParagraphs = normalized
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (explicitParagraphs.length >= minimumParagraphs) {
+    return ensureMinimumParagraphs(explicitParagraphs, minimumParagraphs);
+  }
+
+  if (explicitParagraphs.length > 1) {
+    return ensureMinimumParagraphs(explicitParagraphs, minimumParagraphs);
+  }
+
+  const sentences = splitIntoSentences(normalized);
+  if (sentences.length === 0) {
+    return [normalized];
+  }
+
+  const paragraphTarget = Math.max(6, Math.min(9, Math.ceil(sentences.length / 2)));
+  const groupSize = Math.max(2, Math.ceil(sentences.length / paragraphTarget));
+  const generatedParagraphs: string[] = [];
+
+  for (let index = 0; index < sentences.length; index += groupSize) {
+    generatedParagraphs.push(sentences.slice(index, index + groupSize).join(" ").trim());
+  }
+
+  return ensureMinimumParagraphs(generatedParagraphs, minimumParagraphs);
+}
+
+function buildNarrativePageContents(content: string, pageCount = MIN_CHAPTER_TEXT_PAGES): string[] {
+  const paragraphs = normalizeChapterParagraphs(content, pageCount);
+  if (paragraphs.length === 0) {
+    return Array.from({ length: pageCount }, () => "");
+  }
+
+  const balancedParagraphs = ensureMinimumParagraphs(paragraphs, pageCount);
+  const totalWords = balancedParagraphs.reduce((sum, paragraph) => sum + countWords(paragraph), 0);
+  const targetWords = Math.max(TARGET_WORDS_PER_TEXT_PAGE, Math.ceil(totalWords / pageCount));
+  const pages = Array.from({ length: pageCount }, () => [] as string[]);
+
+  let pageIndex = 0;
+  let currentPageWords = 0;
+
+  for (let index = 0; index < balancedParagraphs.length; index += 1) {
+    const paragraph = balancedParagraphs[index];
+    const words = countWords(paragraph);
+    const paragraphsRemaining = balancedParagraphs.length - index;
+    const pagesRemaining = pageCount - pageIndex;
+
+    if (
+      pageIndex < pageCount - 1 &&
+      pages[pageIndex].length > 0 &&
+      (currentPageWords >= targetWords || paragraphsRemaining <= pagesRemaining - 1)
+    ) {
+      pageIndex += 1;
+      currentPageWords = 0;
+    }
+
+    pages[pageIndex].push(paragraph);
+    currentPageWords += words;
+  }
+
+  for (let index = 1; index < pages.length; index += 1) {
+    if (pages[index].length > 0) {
+      continue;
+    }
+
+    for (let donorIndex = index - 1; donorIndex >= 0; donorIndex -= 1) {
+      if (pages[donorIndex].length > 1) {
+        const movedParagraph = pages[donorIndex].pop();
+        if (movedParagraph) {
+          pages[index].push(movedParagraph);
+          break;
+        }
+      }
+    }
+  }
+
+  return pages.map((page, index) => {
+    if (page.length > 0) {
+      return page.join("\n\n");
+    }
+
+    return balancedParagraphs[index] || balancedParagraphs[balancedParagraphs.length - 1] || content.trim();
+  });
+}
+
+function getNarrativePageCount(sourceMode?: WebBookSourceMode): number {
+  return sourceMode === "search-fallback" ? SEARCH_FALLBACK_TEXT_PAGES : MIN_CHAPTER_TEXT_PAGES;
+}
+
+export function buildChapterRenderPlan(
+  chapters: Chapter[],
+  options: { sourceMode?: WebBookSourceMode } = {}
+): ChapterRenderPlan[] {
+  const narrativePageCount = getNarrativePageCount(options.sourceMode);
+  const safeChapters = Array.isArray(chapters) ? chapters.map(normalizeChapterForRender) : [];
+  let nextPageNumber = 3;
+  const pageKinds: ChapterNarrativePage["pageKind"][] = ["opening", "analysis", "synthesis"];
+
+  return safeChapters.map((chapter) => {
+    const renderableDefinitions = getRenderableDefinitions(chapter.definitions || [], 8);
+    const renderableSubTopics = getRenderableSubTopics(chapter.subTopics || []).slice(0, 4);
+    const textPageContents = buildNarrativePageContents(chapter.content, narrativePageCount);
+    const titlePageNumber = nextPageNumber;
+    const textPages = textPageContents.map((content, index) => ({
+      pageNumber: titlePageNumber + index,
+      content,
+      pageKind: pageKinds[index] || "synthesis",
+    }));
+
+    nextPageNumber += textPages.length;
+    const glossaryPageNumber = nextPageNumber;
+    nextPageNumber += 1;
 
     return {
       chapter,
       titlePageNumber,
-      analysisPageNumber,
+      textPages,
+      glossaryPageNumber,
       renderableDefinitions,
       renderableSubTopics,
     };
@@ -230,7 +430,9 @@ export function getChapterSourceLinks(
   const { includeSearchResults = true, maxItems = Number.POSITIVE_INFINITY } = options;
   const links: NormalizedSourceLink[] = [];
 
-  chapter.sourceUrls.forEach((source) => {
+  const sourceUrls = Array.isArray(chapter?.sourceUrls) ? chapter.sourceUrls : [];
+
+  sourceUrls.forEach((source) => {
     const normalized = normalizeSourceLink(source);
     if (!normalized) return;
     if (!includeSearchResults && normalized.isSearchResultsPage) return;

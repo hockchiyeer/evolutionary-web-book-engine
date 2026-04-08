@@ -85,6 +85,11 @@ export function useWebBookEngine() {
 
       const searchResult = await searchAndExtract(trimmedQuery);
       const initialPopulation = searchResult.results;
+      if (initialPopulation.length === 0) {
+        throw new Error(
+          `No usable external evidence was gathered for "${trimmedQuery}", so WebBook assembly was skipped.`
+        );
+      }
       const initialBest = initialPopulation.length > 0
         ? initialPopulation.reduce((previous, current) => (
           previous.informativeScore + previous.authorityScore > current.informativeScore + current.authorityScore
@@ -109,6 +114,11 @@ export function useWebBookEngine() {
       }));
 
       const evolvedPopulation = await evolve(initialPopulation);
+      if (evolvedPopulation.length === 0) {
+        throw new Error(
+          `No usable source pages remained after evolution for "${trimmedQuery}", so the WebBook could not be assembled.`
+        );
+      }
       const bestEvolved = evolvedPopulation.length > 0
         ? evolvedPopulation.reduce((previous, current) => previous.fitness > current.fitness ? previous : current)
         : null;
@@ -225,4 +235,5 @@ export function useWebBookEngine() {
     clearAllHistory,
   };
 }
+
 

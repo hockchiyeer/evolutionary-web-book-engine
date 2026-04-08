@@ -120,6 +120,7 @@ Recommended:
 
 ```env
 GEMINI_API_KEY="your_gemini_api_key"
+VITE_GEMINI_API_KEY="your_gemini_api_key"
 ```
 
 Optional Firebase configuration:
@@ -136,7 +137,8 @@ VITE_FIREBASE_MEASUREMENT_ID="..."
 
 Notes:
 
-- `GEMINI_API_KEY` is recommended, but the app can still fall back to search-based synthesis when Gemini is unavailable.
+- `VITE_GEMINI_API_KEY` is the safest option for browser-hosted deployments. `GEMINI_API_KEY` is also supported when your host injects runtime environment values for the app.
+- Gemini is recommended, but the app can still fall back to search-based synthesis when Gemini is unavailable.
 - `APP_URL` is present in `.env.example` for AI Studio style hosting metadata, but it is not required for normal local development.
 - `DISABLE_HMR=true` can be used in environments where hot reload causes instability.
 
@@ -204,6 +206,27 @@ Fallback content is then deduplicated at multiple stages:
 - fallback population deduplication in `src/services/evolutionService.ts`
 - cross-chapter sentence deduplication during fallback book assembly
 - synthesis-chapter filtering so it does not simply repeat standalone source chapters
+
+### Source Routing Matrix
+
+Expected source routing by scenario:
+
+1. Gemini search succeeds and yields usable external evidence:
+   - Keep `sourceMode: gemini`.
+   - Optionally enrich with `/api/search-fallback` evidence when available.
+   - Continue evolution and assembly.
+2. Gemini search succeeds but yields too little usable external evidence:
+   - Attempt `/api/search-fallback` immediately.
+   - If fallback returns usable results, switch to `sourceMode: search-fallback` and continue with blended evidence.
+   - If fallback is unavailable, fail the run with an error rather than generating a placeholder one-chapter book.
+3. Gemini search fails for a recoverable reason (missing/invalid key, quota/rate limit, temporary service/network issues):
+   - Attempt `/api/search-fallback`.
+   - If fallback returns usable results, continue in `sourceMode: search-fallback`.
+   - If fallback is unavailable, fail with a clear error instead of assembling from an empty local pool.
+4. Gemini chapter assembly fails after a successful search/evolution stage:
+   - Attempt `/api/search-fallback` to augment/recover.
+   - If fallback is unavailable, the app may still assemble from current evolved evidence only when that evidence is substantive.
+   - If evidence is too thin, fail with an explicit error instead of exporting synthetic placeholder prose.
 
 ## History And Persistence
 

@@ -29,7 +29,8 @@ export type SearchFallbackReason =
   | 'missing_api_key'
   | 'invalid_api_key'
   | 'quota_or_rate_limit'
-  | 'service_unavailable';
+  | 'service_unavailable'
+  | 'network_unreachable';
 
 export interface SearchArtifact {
   web?: {
@@ -44,6 +45,7 @@ export interface SearchFallbackResult {
   url: string;
   domain: string;
   snippet: string;
+  excerpt?: string;
 }
 
 export interface SearchFallbackPayload {
@@ -96,6 +98,7 @@ export interface EvolutionState {
 
 declare global {
   interface ImportMetaEnv {
+    readonly VITE_GEMINI_API_KEY?: string;
     readonly VITE_FIREBASE_API_KEY?: string;
     readonly VITE_FIREBASE_AUTH_DOMAIN?: string;
     readonly VITE_FIREBASE_PROJECT_ID?: string;
