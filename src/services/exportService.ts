@@ -1,36 +1,4 @@
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import type { WebBook } from '../types';
-
-type PdfLinkAnnotation = {
-  sourcePageNumber: number;
-  xRatio: number;
-  yRatio: number;
-  widthRatio: number;
-  heightRatio: number;
-} & ({
-  targetPageNumber: number;
-} | {
-  externalUrl: string;
-});
-
-const PDF_EXPORT_PAGE_WIDTH = 794;
-const PDF_EXPORT_PAGE_HEIGHT = 1123;
-const PDF_IMAGE_MAX_DIMENSION = 1600;
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function getPdfRenderScale(pageCount: number): number {
-  if (pageCount >= 40) return 0.8;
-  if (pageCount >= 30) return 0.95;
-  if (pageCount >= 20) return 1.1;
-  if (pageCount >= 12) return 1.3;
-  if (pageCount >= 8) return 1.5;
-  if (pageCount >= 5) return 1.7;
-  return 1.9;
-}
 
 function getWebBookElement(): HTMLElement {
   const element = document.querySelector('.web-book-container') as HTMLElement | null;
@@ -44,112 +12,6 @@ function formatSourceLink(source: string | { title: string; url: string }): stri
   return typeof source === 'string' ? source : `${source.title} - ${source.url}`;
 }
 
-async function inlineImagesForExport(
-  root: HTMLElement,
-  options: { maxDimension: number; quality: number; hideOnError?: boolean }
-): Promise<void> {
-  const images = Array.from(root.querySelectorAll('img'));
-
-  await Promise.all(
-    images.map(async (img) => {
-      try {
-        if (!img.src || img.src.startsWith('data:') || img.style.display === 'none') return;
-
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        const tempImg = new Image();
-        tempImg.crossOrigin = 'anonymous';
-
-        await new Promise((resolve, reject) => {
-          const timeout = window.setTimeout(() => reject(new Error('Image load timeout')), 7000);
-          tempImg.onload = () => {
-            window.clearTimeout(timeout);
-            resolve(null);
-          };
-          tempImg.onerror = () => {
-            window.clearTimeout(timeout);
-            reject(new Error('Image load error'));
-          };
-          tempImg.src = img.src;
-        });
-
-        const originalWidth = tempImg.naturalWidth || tempImg.width;
-        const originalHeight = tempImg.naturalHeight || tempImg.height;
-        if (!ctx || !originalWidth || !originalHeight) {
-          throw new Error('Image dimensions unavailable');
-        }
-
-        let width = originalWidth;
-        let height = originalHeight;
-        if (width > options.maxDimension || height > options.maxDimension) {
-          if (width > height) {
-            height = Math.round((height / width) * options.maxDimension);
-            width = options.maxDimension;
-          } else {
-            width = Math.round((width / height) * options.maxDimension);
-            height = options.maxDimension;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(tempImg, 0, 0, width, height);
-        img.src = canvas.toDataURL('image/jpeg', options.quality);
-        img.style.filter = 'none';
-        img.style.boxShadow = 'none';
-        img.className = img.className.replace(/grayscale|hover:grayscale-0/g, '');
-      } catch (error) {
-        console.warn('Skipping image during export preprocessing:', error);
-        if (options.hideOnError) {
-          img.style.display = 'none';
-        }
-      }
-    })
-  );
-}
-
-function createHiddenExportClone(element: HTMLElement): { clone: HTMLElement; cleanup: () => void } {
-  const wrapper = document.createElement('div');
-  wrapper.setAttribute('aria-hidden', 'true');
-  Object.assign(wrapper.style, {
-    position: 'fixed',
-    left: '-20000px',
-    top: '0',
-    width: `${PDF_EXPORT_PAGE_WIDTH}px`,
-    zIndex: '-1',
-    pointerEvents: 'none',
-    background: 'white',
-  });
-
-  const clone = element.cloneNode(true) as HTMLElement;
-  clone.style.width = `${PDF_EXPORT_PAGE_WIDTH}px`;
-  clone.style.maxWidth = `${PDF_EXPORT_PAGE_WIDTH}px`;
-  clone.style.margin = '0';
-  clone.style.padding = '0';
-  clone.style.background = 'transparent';
-  clone.style.boxShadow = 'none';
-  clone.style.border = 'none';
-  clone.style.gap = '0';
-
-  clone.querySelectorAll<HTMLElement>('[data-pdf-page-number]').forEach((page) => {
-    page.style.width = `${PDF_EXPORT_PAGE_WIDTH}px`;
-    page.style.minHeight = `${PDF_EXPORT_PAGE_HEIGHT}px`;
-    page.style.margin = '0';
-    page.style.borderRadius = '0';
-    page.style.boxShadow = 'none';
-    page.style.overflow = 'hidden';
-    page.style.setProperty('break-inside', 'avoid');
-    page.style.pageBreakAfter = 'always';
-  });
-
-  wrapper.appendChild(clone);
-  document.body.appendChild(wrapper);
-
-  return {
-    clone,
-    cleanup: () => wrapper.remove(),
-  };
-}
 
 function prepareWordFooterForExport(root: HTMLElement): void {
   const footerSection = root.querySelector<HTMLElement>('[data-pdf-page-kind="footer"]');
@@ -203,53 +65,6 @@ function prepareWordFooterForExport(root: HTMLElement): void {
   }
 }
 
-function collectPdfLinkAnnotations(root: HTMLElement): PdfLinkAnnotation[] {
-  const internalLinks = Array.from(root.querySelectorAll<HTMLElement>('[data-pdf-target-page]'));
-  const externalLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'))
-    .filter((anchor) => /^https?:\/\//i.test(anchor.href));
-
-  return [...internalLinks, ...externalLinks]
-    .map((element) => {
-      const sourcePage = element.closest<HTMLElement>('[data-pdf-page-number]');
-      const sourcePageNumber = Number(sourcePage?.dataset.pdfPageNumber);
-
-      if (!sourcePage || !Number.isFinite(sourcePageNumber)) {
-        return null;
-      }
-
-      const sourceRect = sourcePage.getBoundingClientRect();
-      const elementRect = element.getBoundingClientRect();
-      if (!sourceRect.width || !sourceRect.height || !elementRect.width || !elementRect.height) {
-        return null;
-      }
-
-      const baseAnnotation = {
-        sourcePageNumber,
-        xRatio: (elementRect.left - sourceRect.left) / sourceRect.width,
-        yRatio: (elementRect.top - sourceRect.top) / sourceRect.height,
-        widthRatio: elementRect.width / sourceRect.width,
-        heightRatio: elementRect.height / sourceRect.height,
-      };
-
-      if (element instanceof HTMLAnchorElement && /^https?:\/\//i.test(element.href)) {
-        return {
-          ...baseAnnotation,
-          externalUrl: element.href,
-        };
-      }
-
-      const targetPageNumber = Number(element.dataset.pdfTargetPage);
-      if (!Number.isFinite(targetPageNumber)) {
-        return null;
-      }
-
-      return {
-        ...baseAnnotation,
-        targetPageNumber,
-      };
-    })
-    .filter((annotation): annotation is PdfLinkAnnotation => Boolean(annotation));
-}
 
 export async function exportWebBookToTxt(webBook: WebBook): Promise<void> {
   let text = `${webBook.topic.toUpperCase()}\n`;
@@ -423,97 +238,114 @@ export async function exportWebBookToWord(webBook: WebBook): Promise<void> {
 }
 
 export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
-  const element = getWebBookElement();
-  await wait(150);
+  const element = document.querySelector('.web-book-container');
 
-  let cleanup: (() => void) | null = null;
-
-  try {
-    const hiddenClone = createHiddenExportClone(element);
-    cleanup = hiddenClone.cleanup;
-    const { clone } = hiddenClone;
-
-    await wait(100);
-    await inlineImagesForExport(clone, {
-      maxDimension: PDF_IMAGE_MAX_DIMENSION,
-      quality: 0.84,
-      hideOnError: true,
-    });
-    await wait(100);
-
-    const linkAnnotations = collectPdfLinkAnnotations(clone);
-    const pages = Array.from(clone.querySelectorAll<HTMLElement>('[data-pdf-page-number]'));
-    if (pages.length === 0) {
-      throw new Error('No paged content found for PDF export');
-    }
-
-    await document.fonts?.ready?.catch(() => undefined);
-
-    const pdf = new jsPDF({
-      unit: 'mm',
-      format: 'a4',
-      orientation: 'portrait',
-      compress: true,
-      putOnlyUsedFonts: true,
-    });
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-    const renderScale = getPdfRenderScale(pages.length);
-
-    for (const [index, page] of pages.entries()) {
-      if (index > 0) {
-        pdf.addPage();
-      }
-
-      const canvas = await html2canvas(page, {
-        scale: renderScale,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        imageTimeout: 15000,
-        removeContainer: true,
-        foreignObjectRendering: false,
-        windowWidth: PDF_EXPORT_PAGE_WIDTH,
-        scrollX: 0,
-        scrollY: 0,
-      });
-
-      const imageData = canvas.toDataURL('image/jpeg', 0.92);
-      pdf.addImage(imageData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'MEDIUM');
-      canvas.width = 0;
-      canvas.height = 0;
-
-      const sourcePageNumber = Number(page.dataset.pdfPageNumber);
-      if (!Number.isFinite(sourcePageNumber)) continue;
-
-      linkAnnotations
-        .filter((annotation) => annotation.sourcePageNumber === sourcePageNumber)
-        .forEach((annotation) => {
-          const rect = [
-            annotation.xRatio * pdfWidth,
-            annotation.yRatio * pdfHeight,
-            annotation.widthRatio * pdfWidth,
-            annotation.heightRatio * pdfHeight,
-          ] as const;
-
-          if ('externalUrl' in annotation) {
-            pdf.link(rect[0], rect[1], rect[2], rect[3], { url: annotation.externalUrl });
-            return;
-          }
-
-          pdf.link(rect[0], rect[1], rect[2], rect[3], { pageNumber: annotation.targetPageNumber });
-        });
-
-      await wait(0);
-    }
-
-    pdf.save(`${webBook.topic.replace(/\s+/g, '_')}.pdf`);
-  } catch (error) {
-    console.error('PDF Export failed:', error);
-    alert("High-res PDF export still hit a browser limit before finishing. The exporter now renders one page at a time, but very large books or blocked remote images can still fail. Please use 'Print / Save as PDF' as the fallback if needed.");
-  } finally {
-    cleanup?.();
+  if (!element) {
+    throw new Error('No rendered Web-book was found to export.');
   }
+
+  // Clone to avoid UI mutation
+  const clone = element.cloneNode(true) as HTMLElement;
+
+  // Remove UI-only elements
+  clone.querySelectorAll('button, .print\\:hidden, [data-html2canvas-ignore]')
+    .forEach((el) => el.remove());
+
+  const htmlContent = clone.outerHTML;
+
+  // FULL HTML DOCUMENT (critical for Puppeteer)
+  const fullHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>${webBook.topic}</title>
+
+      <script src="https://cdn.tailwindcss.com"></script>
+
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display&family=JetBrains+Mono&display=swap" rel="stylesheet">
+
+      <style>
+        body {
+          font-family: 'Inter', sans-serif;
+          margin: 0;
+          padding: 0;
+          background: white;
+        }
+
+        * {
+          box-sizing: border-box;
+          overflow-wrap: break-word;
+        }
+
+        .web-book-container {
+          width: 100%;
+          max-width: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .web-book-page {
+          break-after: page;
+          page-break-after: always;
+          padding: 24mm;
+        }
+
+        .web-book-page:last-child {
+          break-after: auto;
+          page-break-after: auto;
+        }
+
+        /* Prevent ugly splits */
+        h1, h2, h3, h4 {
+          break-after: avoid;
+        }
+
+        p, li {
+          break-inside: avoid;
+        }
+
+        img {
+          max-width: 100%;
+          break-inside: avoid;
+        }
+
+        @page {
+          size: A4;
+          margin: 0;
+        }
+      </style>
+    </head>
+    <body>
+      ${htmlContent}
+    </body>
+    </html>
+  `;
+
+  const response = await fetch('/__pdf', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      html: fullHtml,
+      fileName: webBook.topic.replace(/\s+/g, '_'),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('PDF export failed');
+  }
+
+  const blob = await response.blob();
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${webBook.topic.replace(/\s+/g, '_')}.pdf`;
+  a.click();
+
+  URL.revokeObjectURL(url);
 }
 
 export async function printWebBook(webBook: WebBook): Promise<void> {

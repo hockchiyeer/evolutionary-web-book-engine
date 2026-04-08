@@ -61,8 +61,8 @@ export function ControlSidebar({
 
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = '82px';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 172)}px`;
     }
   }, [query]);
 
@@ -147,8 +147,9 @@ export function ControlSidebar({
             rows={2}
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Enter search topic..."
-            className="w-full bg-[#F5F5F5] border border-[#141414] p-4 pr-14 focus:outline-none focus:ring-0 text-base sm:text-lg font-mono resize-none overflow-y-auto max-h-[160px] min-h-[82px]"
+            placeholder="Search for topic..."
+            className="w-full bg-[#F5F5F5] border border-[#141414] p-4 pr-14 focus:outline-none focus:ring-0 text-base sm:text-lg font-mono resize-none overflow-y-auto max-h-40"
+            style={{ height: 'auto', minHeight: '84px' }}
             disabled={isBusy}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
