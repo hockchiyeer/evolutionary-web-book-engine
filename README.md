@@ -77,7 +77,8 @@ This repository now includes:
 |-- tsconfig.json
 |-- vite.config.ts
 |-- server
-|   `-- googleSearchFallback.ts
+|   |-- googleSearchFallback.ts
+|   `-- pdfBridge.ts
 `-- src
     |-- App.tsx
     |-- index.css
@@ -185,10 +186,10 @@ The current Web-book can be exported as:
 
 Current export behavior:
 
-- PDF export keeps internal chapter jumps and external article links clickable.
+- PDF export uses a zero-server Puppeteer pipeline (via Vite middleware) to generate high-quality server-side PDFs without crashing the browser thread.
 - HTML export preserves the rendered Web-book layout and links.
 - Word export produces `.doc`, not `.docx`.
-- Large PDF exports can still hit browser memory limits. The print flow is the safer fallback for very large books.
+- The legacy print flow remains available as a simple browser fallback.
 
 ## Search Fallback Behavior
 
@@ -242,10 +243,11 @@ Firebase support is implemented in `src/services/historyService.ts`.
 
 This repo is not purely static anymore.
 
-The fallback endpoint lives in Vite middleware:
+The endpoints live in Vite middleware:
 
 ```text
 /api/search-fallback
+/__pdf
 ```
 
 That means:
@@ -262,7 +264,7 @@ If you deploy beyond local Vite dev/preview, recreate the fallback route in a re
 - `calculateFitness()` supports redundancy penalty, but the current `evolve()` loop still evaluates pages against an empty comparison set during that stage.
 - Decorative chapter images come from `picsum.photos`; they are placeholders, not topic-aware generated illustrations.
 - `package.json` is still named `react-example` even though the app and repo are Evolutionary Web-Book Engine.
-- `express` and `dotenv` are present in dependencies, but the checked-in fallback route is implemented as Vite middleware rather than a standalone Express server.
+- `dotenv` is present in dependencies, but the checked-in backend endpoints are implemented as Vite middleware rather than a standalone Express server.
 
 ## AI Studio Metadata
 
