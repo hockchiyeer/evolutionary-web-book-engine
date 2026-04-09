@@ -26,7 +26,8 @@ try {
 
 const addCucumberPreprocessorPlugin = require('@badeball/cypress-cucumber-preprocessor').addCucumberPreprocessorPlugin;
 const createEsbuildPlugin = require('@badeball/cypress-cucumber-preprocessor/esbuild').createEsbuildPlugin;
-const { getCypressEnvironmentConfig } = require('./cypress.env.config');
+const { getCypressEnvironmentConfig } = require('./cypress.env.config.cjs');
+const cucumberConfig = require('./.cypress-cucumber-preprocessorrc.json');
 
 const env = process.env.ENVIRONMENT || 'DEV';
 
@@ -65,13 +66,21 @@ module.exports = defineConfig({
       return config;
     },
     specPattern: [
-      "cypress/e2e/features/**/*.feature",
+      "tests/cypress/features/**/*.feature",
       "**/*.spec.js"
     ],
+    supportFile: "tests/cypress/support/e2e.js",
     env: {
       ...getCypressEnvironmentConfig(env),
-      omitFiltered: true,
-      filterSpecs: true
+      stepDefinitions: cucumberConfig.stepDefinitions,
+      htmlEnabled: cucumberConfig.html?.enabled,
+      htmlOutput: cucumberConfig.html?.output,
+      jsonEnabled: cucumberConfig.json?.enabled,
+      jsonOutput: cucumberConfig.json?.output,
+      messagesEnabled: cucumberConfig.messages?.enabled,
+      messagesOutput: cucumberConfig.messages?.output,
+      omitFiltered: cucumberConfig.omitFiltered ?? true,
+      filterSpecs: cucumberConfig.filterSpecs ?? true
     },
     includeShadowDom: true,
   },

@@ -31,7 +31,7 @@ function loadGlobalEnvironmentVariables() {
 function getCypressEnvironmentConfig(environment) {
   const envUrls = ENVIRONMENT_URLS[environment] || ENVIRONMENT_URLS['DEV'];
   const globalVars = loadGlobalEnvironmentVariables();
-  
+
   return {
     ...envUrls,
     ...globalVars,

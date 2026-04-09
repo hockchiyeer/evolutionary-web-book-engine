@@ -1,7 +1,7 @@
 import 'cypress-xpath';
 import 'cypress-iframe';
 require('cypress-downloadfile/lib/downloadFileCommand');
-import './custom';
+import './commands';
 
 // Optional: Hide XHR/fetch requests from the command log
 const app = window.top;
