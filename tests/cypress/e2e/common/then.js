@@ -12,12 +12,12 @@ Then("I should see {string} is enabled on {string}", (locator_name, page_name) =
   cy.verifyElementIsEnabled(locator_name, page_name);
 });
 
-Then("I should see {string} text displayed in {string} on {string}", (value, locator_name, page_name) => {
+Then("I should see {string} text displayed in {string} on {string}", (locator_name, value, page_name) => {
   let expectedValue = Cypress.env(value) || value;
   cy.verifyTextIsDisplayed(locator_name, page_name, expectedValue);
 });
 
-Then("I should not see {string} text displayed in {string} on {string}", (value, locator_name, page_name) => {
+Then("I should not see {string} text displayed in {string} on {string}", (locator_name, value, page_name) => {
   let expectedValue = Cypress.env(value) || value;
   cy.verifyTextIsNotDisplayed(locator_name, page_name, expectedValue);
 });

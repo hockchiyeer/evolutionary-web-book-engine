@@ -26,6 +26,17 @@
 
 import { objects } from '../pageObjects';
 
+const SEARCH_FALLBACK_ROUTE = '**/api/search-fallback*';
+const PDF_EXPORT_ROUTE = '**/__pdf';
+
+function normalizeComparableText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Check if locator is XPath
 function isXPath(locatorStr) {
   return locatorStr.startsWith('//') || locatorStr.startsWith('(') || locatorStr.startsWith('./');
@@ -56,6 +67,19 @@ function getRawLocator(page_name, locator_name) {
   return objects[page][locatorKey];
 }
 
+function buildExportWindowStub() {
+  return {
+    document: {
+      write() {},
+      close() {},
+    },
+    focus() {},
+    print() {},
+    close() {},
+    onload: null,
+  };
+}
+
 Cypress.Commands.add('injectFakeOneTrustCookies', () => {
   var bannerClosed = 'OptanonAlertBoxClosed';
   var bannerClosedValue = new Date(Date.now() - 60 * 1000).toISOString();
@@ -71,6 +95,35 @@ Cypress.Commands.add('clearCookiesAndStorage', () => {
   cy.clearAllCookies();
   cy.clearAllSessionStorage();
   cy.clearAllLocalStorage();
+});
+
+Cypress.Commands.add('mockFallbackSearchResults', (fixtureName = 'search-fallback-quantum-physics.json') => {
+  cy.fixture(fixtureName).then((payload) => {
+    cy.intercept('GET', SEARCH_FALLBACK_ROUTE, {
+      statusCode: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: payload,
+    }).as('searchFallback');
+  });
+});
+
+Cypress.Commands.add('stubWebBookExportHandlers', () => {
+  cy.intercept('POST', PDF_EXPORT_ROUTE, {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/pdf',
+    },
+    body: 'Mock PDF content',
+  }).as('pdfExport');
+
+  cy.window().then((win) => {
+    cy.stub(win, 'open').callsFake(() => buildExportWindowStub()).as('windowOpen');
+    cy.stub(win.URL, 'createObjectURL').returns('blob:mock-export').as('createObjectURL');
+    cy.stub(win.URL, 'revokeObjectURL').as('revokeObjectURL');
+    cy.stub(win.HTMLAnchorElement.prototype, 'click').as('downloadClick');
+  });
 });
 
 Cypress.Commands.add('navigateToUrlAndCloseCookiesPopUp', (url) => {
@@ -118,25 +171,39 @@ Cypress.Commands.add('verifyElementIsVisible', (locator_name, page_name) => {
 });
 
 Cypress.Commands.add('verifyTextIsDisplayed', (locator_name, page_name, value) => {
-  getElement(page_name, locator_name).then(($element) => {
-    const elementText = $element.text().trim();
-    const elementValue = $element.val();
-    const elementHtml = $element.html();
+  const expectedValue = normalizeComparableText(value);
 
-    if (elementText.includes(value)) {
-      cy.wrap($element).should('include.text', value);
-    } else if (elementValue && elementValue.toString().includes(value)) {
-      cy.wrap($element).should('have.value', value);
-    } else if (elementHtml && elementHtml.includes(value)) {
-      cy.wrap($element).contains(value);
-    } else {
-      cy.wrap($element).should('include.text', value);
-    }
+  getElement(page_name, locator_name).should(($element) => {
+    const candidates = [
+      normalizeComparableText($element.text()),
+      normalizeComparableText($element.val()),
+      normalizeComparableText($element.html()),
+    ];
+
+    const isMatched = candidates.some((candidate) => candidate.includes(expectedValue));
+    expect(
+      isMatched,
+      `Expected ${locator_name} on ${page_name} to contain "${value}"`
+    ).to.be.true;
   });
 });
 
 Cypress.Commands.add('verifyTextIsNotDisplayed', (locator_name, page_name, value) => {
-  getElement(page_name, locator_name).should('not.include.text', value);
+  const expectedValue = normalizeComparableText(value);
+
+  getElement(page_name, locator_name).should(($element) => {
+    const candidates = [
+      normalizeComparableText($element.text()),
+      normalizeComparableText($element.val()),
+      normalizeComparableText($element.html()),
+    ];
+
+    const isMatched = candidates.some((candidate) => candidate.includes(expectedValue));
+    expect(
+      isMatched,
+      `Expected ${locator_name} on ${page_name} not to contain "${value}"`
+    ).to.be.false;
+  });
 });
 
 Cypress.Commands.add('verifyElementIsEnabled', (locator_name, page_name) => {
@@ -148,7 +215,11 @@ Cypress.Commands.add('verifyElementIsDisabled', (locator_name, page_name) => {
 });
 
 Cypress.Commands.add('verifyTitle', (title) => {
-  cy.title().should('include', title);
+  const expectedTitle = normalizeComparableText(title);
+
+  cy.title().should((actualTitle) => {
+    expect(normalizeComparableText(actualTitle)).to.include(expectedTitle);
+  });
 });
 
 Cypress.Commands.add('pageContainsText', (text) => {

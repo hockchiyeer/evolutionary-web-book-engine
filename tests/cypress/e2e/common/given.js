@@ -15,3 +15,11 @@ Given('I clear Web browser cookies', () => {
 Given('I inject fake OneTrust cookies to the Web browser', () => {
   cy.injectFakeOneTrustCookies();
 });
+
+Given('I stub fallback search results using fixture {string}', (fixtureName) => {
+  cy.mockFallbackSearchResults(fixtureName);
+});
+
+Given('I stub Web-book export handlers', () => {
+  cy.stubWebBookExportHandlers();
+});
