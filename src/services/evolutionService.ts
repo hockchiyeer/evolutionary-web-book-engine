@@ -777,6 +777,13 @@ function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
   return cleaned;
 }
 
+function sanitizeSourceTitle(title: string): string {
+  return title
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:(?:\[(?:pdf|doc|docs|docx|docss)\]|\((?:pdf|doc|docs|docx|docss)\)|(?:pdf|doc|docs|docx|docss)\b)\s*[-:|]?\s*)+/i, '')
+    .trim();
+}
+
 function buildFallbackResultEvidenceText(result: SearchFallbackResult): string {
   return normalizePopulationText([
     result.excerpt || '',
@@ -790,7 +797,7 @@ function selectDistinctFallbackResults(results: SearchFallbackResult[], maxResul
   for (const result of results) {
     const candidate: SearchFallbackResult = {
       ...result,
-      title: result.title.trim(),
+      title: sanitizeSourceTitle(result.title),
       snippet: sanitizeFallbackSnippet(result.snippet, 4),
       excerpt: result.excerpt ? sanitizeFallbackSnippet(result.excerpt, 10) : undefined,
     };
@@ -895,7 +902,7 @@ function selectDistinctPopulationPages(
   for (const page of pages) {
     const candidate: WebPageGenotype = {
       ...page,
-      title: page.title?.trim() || '',
+      title: sanitizeSourceTitle(page.title || ''),
       content: normalizePopulationText(page.content || ''),
       definitions: getRenderableDefinitions(page.definitions || [], 8),
       subTopics: getRenderableSubTopics(page.subTopics || []).slice(0, 8),

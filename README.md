@@ -11,7 +11,7 @@ This repository now includes:
 - Gemini-first generation with automatic search fallback
 - source-pool consolidation that can preserve roughly 40-50 distinct evidence items before assembly
 - deduplication for fallback-derived summaries, chapters, and source evidence
-- export to PDF, print, Word, HTML, and plain text
+- export to PDF, print, native Word `.docx`, HTML, and plain text
 
 ## What The App Does
 
@@ -92,6 +92,7 @@ This repository now includes:
     |-- hooks
     |   `-- useWebBookEngine.ts
     |-- services
+    |   |-- docxExport.ts
     |   |-- evolutionService.ts
     |   |-- exportService.ts
     |   |-- googleSearchFallbackClient.ts
@@ -236,7 +237,7 @@ The current Web-book can be exported as:
 
 - high-resolution PDF
 - print / save as PDF
-- Word `.doc`
+- Word `.docx`
 - standalone HTML
 - plain text
 
@@ -244,7 +245,7 @@ Current export behavior:
 
 - PDF export uses a zero-server Puppeteer pipeline (via Vite middleware) to generate high-quality server-side PDFs without crashing the browser thread.
 - HTML export preserves the rendered Web-book layout and links.
-- Word export produces `.doc`, not `.docx`.
+- Word export produces a native `.docx` package with embedded chapter images and clickable internal and external links where supported.
 - The legacy print flow remains available as a simple browser fallback.
 
 ## Search Fallback Behavior

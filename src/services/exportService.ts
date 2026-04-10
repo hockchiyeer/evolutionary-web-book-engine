@@ -1,4 +1,5 @@
 import type { WebBook } from '../types';
+import { buildWebBookDocx, type DocxChapterImageAsset } from './docxExport';
 
 function getWebBookElement(): HTMLElement {
   const element = document.querySelector('.web-book-container') as HTMLElement | null;
@@ -12,59 +13,67 @@ function formatSourceLink(source: string | { title: string; url: string }): stri
   return typeof source === 'string' ? source : `${source.title} - ${source.url}`;
 }
 
-
-function prepareWordFooterForExport(root: HTMLElement): void {
-  const footerSection = root.querySelector<HTMLElement>('[data-pdf-page-kind="footer"]');
-  if (!footerSection) return;
-
-  footerSection.style.padding = '40px 40px 28px';
-  footerSection.style.minHeight = '170px';
-  footerSection.style.display = 'flex';
-  footerSection.style.flexDirection = 'column';
-  footerSection.style.justifyContent = 'space-between';
-  footerSection.style.gap = '16px';
-
-  const footerRow = footerSection.firstElementChild as HTMLElement | null;
-  const footerPageNumber = footerSection.lastElementChild as HTMLElement | null;
-  const footerMeta = footerRow?.firstElementChild as HTMLElement | null;
-  const footerLink = footerRow?.querySelector<HTMLElement>('a[href="#top"]');
-
-  if (footerRow && footerMeta && footerLink) {
-    const table = document.createElement('table');
-    table.setAttribute('role', 'presentation');
-    table.style.width = '100%';
-    table.style.borderCollapse = 'collapse';
-    table.style.borderSpacing = '0';
-
-    const row = document.createElement('tr');
-    const leftCell = document.createElement('td');
-    const rightCell = document.createElement('td');
-
-    leftCell.style.padding = '0';
-    leftCell.style.verticalAlign = 'bottom';
-    rightCell.style.padding = '0';
-    rightCell.style.verticalAlign = 'bottom';
-    rightCell.style.textAlign = 'right';
-    rightCell.style.whiteSpace = 'nowrap';
-
-    footerLink.style.display = 'inline-block';
-    footerLink.style.fontWeight = '700';
-    footerLink.style.letterSpacing = '0.12em';
-    footerLink.style.textTransform = 'uppercase';
-
-    leftCell.appendChild(footerMeta);
-    rightCell.appendChild(footerLink);
-    row.append(leftCell, rightCell);
-    table.appendChild(row);
-    footerRow.replaceWith(table);
-  }
-
-  if (footerPageNumber) {
-    footerPageNumber.style.marginTop = '0';
-    footerPageNumber.style.textAlign = 'left';
-  }
+function getExportFileName(topic: string, extension: string): string {
+  return `${topic.replace(/\s+/g, '_')}.${extension}`;
 }
 
+function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function parseDataUrlImage(src: string): DocxChapterImageAsset | null {
+  const match = /^data:(image\/(?:jpeg|png|gif));base64,(.+)$/i.exec(src);
+  if (!match) return null;
+
+  const [, rawContentType, base64Payload] = match;
+  const contentType = rawContentType.toLowerCase() as DocxChapterImageAsset['contentType'];
+  const extension = contentType === 'image/png'
+    ? 'png'
+    : contentType === 'image/gif'
+      ? 'gif'
+      : 'jpeg';
+
+  const binary = window.atob(base64Payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return {
+    altText: '',
+    bytes,
+    contentType,
+    extension,
+    widthPx: 1,
+    heightPx: 1,
+  };
+}
+
+function collectWordChapterImages(root: HTMLElement): Array<DocxChapterImageAsset | null> {
+  return Array.from(root.querySelectorAll<HTMLElement>('[data-pdf-page-kind="chapter"]'))
+    .map((chapterSection) => {
+      const image = chapterSection.querySelector<HTMLImageElement>('img');
+      if (!image?.src) return null;
+
+      const parsed = parseDataUrlImage(image.src);
+      if (!parsed) return null;
+
+      const exportedWidth = Number(image.dataset.exportWidth || image.dataset.exportOriginalWidth || image.naturalWidth || image.width || 0);
+      const exportedHeight = Number(image.dataset.exportHeight || image.dataset.exportOriginalHeight || image.naturalHeight || image.height || 0);
+
+      return {
+        ...parsed,
+        altText: image.alt || 'Chapter image',
+        widthPx: Math.max(1, Math.round(exportedWidth || 1)),
+        heightPx: Math.max(1, Math.round(exportedHeight || 1)),
+      };
+    });
+}
 
 export async function exportWebBookToTxt(webBook: WebBook): Promise<void> {
   let text = `${webBook.topic.toUpperCase()}\n`;
@@ -166,6 +175,10 @@ export async function exportWebBookToWord(webBook: WebBook): Promise<void> {
       canvas.height = tempImg.height;
       ctx?.drawImage(tempImg, 0, 0);
       image.src = canvas.toDataURL('image/jpeg', 0.8);
+      image.dataset.exportOriginalWidth = String(tempImg.naturalWidth || tempImg.width || 1);
+      image.dataset.exportOriginalHeight = String(tempImg.naturalHeight || tempImg.height || 1);
+      image.dataset.exportWidth = String(canvas.width || 1);
+      image.dataset.exportHeight = String(canvas.height || 1);
       image.style.filter = 'none';
       image.className = image.className.replace(/grayscale|hover:grayscale-0/g, '');
     } catch (error) {
@@ -181,6 +194,10 @@ export async function exportWebBookToWord(webBook: WebBook): Promise<void> {
             reader.readAsDataURL(blob);
           });
           image.src = base64;
+          image.dataset.exportOriginalWidth = String(image.naturalWidth || image.width || 1);
+          image.dataset.exportOriginalHeight = String(image.naturalHeight || image.height || 1);
+          image.dataset.exportWidth = String(image.naturalWidth || image.width || 1);
+          image.dataset.exportHeight = String(image.naturalHeight || image.height || 1);
         }
       } catch (fallbackError) {
         console.error('Fetch fallback also failed', fallbackError);
@@ -193,48 +210,12 @@ export async function exportWebBookToWord(webBook: WebBook): Promise<void> {
     image.style.margin = '20px auto';
   }
 
-  clone.querySelectorAll('[id]').forEach((node) => {
-    const id = node.getAttribute('id');
-    if (!id) return;
-
-    const anchor = document.createElement('a');
-    anchor.setAttribute('name', id);
-    node.prepend(anchor);
+  const chapterImages = collectWordChapterImages(clone);
+  const blob = new Blob([buildWebBookDocx(webBook, chapterImages)], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   });
 
-  if (!clone.querySelector('a[name="top"]')) {
-    const topAnchor = document.createElement('a');
-    topAnchor.setAttribute('name', 'top');
-    clone.prepend(topAnchor);
-  }
-
-  prepareWordFooterForExport(clone);
-
-  const htmlContent = clone.outerHTML;
-  const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' " +
-    "xmlns:w='urn:schemas-microsoft-com:office:word' " +
-    "xmlns='http://www.w3.org/TR/REC-html40'>" +
-    "<head><meta charset='utf-8'><title>WebBook Export</title>" +
-    "<style>" +
-    "body { font-family: 'Arial', sans-serif; } " +
-    "img { max-width: 100%; height: auto; display: block; margin: 20px auto; } " +
-    "h2, h3, h4 { font-family: 'Georgia', serif; } " +
-    "a { text-decoration: none; color: inherit; } " +
-    ".font-mono { font-family: 'Courier New', monospace; } " +
-    "</style></head><body>";
-  const footer = '</body></html>';
-  const sourceHtml = header + htmlContent + footer;
-
-  const blob = new Blob(['\ufeff', sourceHtml], {
-    type: 'application/msword',
-  });
-
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${webBook.topic.replace(/\s+/g, '_')}.doc`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, getExportFileName(webBook.topic, 'docx'));
 }
 
 export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
