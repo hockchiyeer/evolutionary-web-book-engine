@@ -164,6 +164,7 @@ Important:
 
 - Use `npm run dev`
 - Do not use `npx run dev`
+- Use `npm start` for hosted AI Studio / Cloud Run style runs so the app is built first and then served through `vite preview`
 
 `npx run dev` installs the unrelated `run` package and does not execute the Vite script from `package.json`.
 
@@ -171,6 +172,7 @@ Important:
 
 - `npm run dev` - start the Vite dev server on port 3000
 - `npm run build` - create a production build
+- `npm start` - build the app and serve it with `vite preview` on the platform `PORT` (recommended for AI Studio / Cloud Run hosting)
 - `npm run preview` - preview the built app
 - `npm run lint` - run TypeScript type checking with `tsc --noEmit`
 - `npm run clean` - remove `dist` using `rm -rf dist`
@@ -313,9 +315,23 @@ That means:
 
 - `npm run dev` supports the fallback route
 - `npm run preview` supports the fallback route
+- `npm start` builds first, then serves the preview server on `0.0.0.0:$PORT`, which is the best fit for AI Studio / Cloud Run style hosting
 - a plain static hosting deployment of only the built `dist/` assets will not provide that route by itself
 
 If you deploy beyond local Vite dev/preview, recreate the fallback route in a real backend or edge/serverless function.
+
+### Google AI Studio Hosting Notes
+
+When this app is hosted inside Google AI Studio, several console messages can appear even when the app itself is healthy:
+
+- Monaco / CSP warnings such as `Could not create web worker(s)` come from the AI Studio editor shell, not from this repo.
+- `Origin trial controlled feature not enabled` warnings also come from the host environment and are not part of the Web-book engine.
+- Vite websocket errors such as `[vite] failed to connect to websocket` mean the app is being served in dev mode through an iframe proxy. The repo now auto-disables HMR when `APP_URL` looks like an AI Studio / Cloud Run deployment, and `npm start` avoids the dev websocket entirely.
+
+Important runtime check:
+
+- Current source from this repo uses direct Gemini browser calls plus `/api/search-fallback`.
+- If the hosted app console shows requests to `/api/search` or `/api/evolve`, the deployed AI Studio app is not running the current source tree from this repository. That indicates a stale deployment or an older generated wrapper, not the current implementation under `src/services/evolutionService.ts`.
 
 ## Known Limitations
 

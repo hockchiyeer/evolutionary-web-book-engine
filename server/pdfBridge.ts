@@ -2,7 +2,7 @@ import puppeteer from 'puppeteer';
 
 export async function generatePdf(html: string): Promise<Buffer> {
     const browser = await puppeteer.launch({
-        headless: 'new',
+        headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'], // needed for many environments
     });
 
@@ -23,5 +23,5 @@ export async function generatePdf(html: string): Promise<Buffer> {
 
     await browser.close();
 
-    return pdf;
+    return Buffer.from(pdf);
 }

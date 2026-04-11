@@ -2,17 +2,47 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import {defineConfig, loadEnv} from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import { googleSearchFallbackPlugin } from './server/googleSearchFallback.ts';
 import { generatePdf } from './server/pdfBridge.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig(({mode}) => {
+function resolvePort(candidate: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(candidate || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isAiStudioHostedApp(appUrl: string | undefined): boolean {
+  const normalized = appUrl?.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  try {
+    const hostname = new URL(normalized).hostname.toLowerCase();
+    return (
+      hostname.endsWith('.run.app') ||
+      hostname.endsWith('.a.run.app') ||
+      hostname.includes('aistudio') ||
+      hostname.includes('googleusercontent')
+    );
+  } catch {
+    const lower = normalized.toLowerCase();
+    return lower.includes('run.app') || lower.includes('aistudio');
+  }
+}
+
+export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const geminiApiKey = typeof env.GEMINI_API_KEY === 'string' && env.GEMINI_API_KEY.trim().length > 0
     ? env.GEMINI_API_KEY
     : 'process.env.GEMINI_API_KEY';
+  const previewPort = resolvePort(process.env.PORT || env.PORT, 3000);
+  const disableHmr = process.env.DISABLE_HMR === 'true'
+    || env.DISABLE_HMR === 'true'
+    || isAiStudioHostedApp(env.APP_URL);
+
   return {
     plugins: [
       react(),
@@ -48,7 +78,7 @@ export default defineConfig(({mode}) => {
             }
           });
         },
-      }
+      },
     ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey),
@@ -58,14 +88,16 @@ export default defineConfig(({mode}) => {
         '@': path.resolve(__dirname, '.'),
       },
     },
-    server:
-    {
+    server: {
       strictPort: true,
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      // Disable HMR in iframe-proxied hosted environments where the websocket
+      // is unreachable and only adds noisy console errors.
+      hmr: disableHmr ? false : undefined,
+    },
+    preview: {
+      host: '0.0.0.0',
+      port: previewPort,
+      strictPort: true,
     },
   };
 });
-
-
