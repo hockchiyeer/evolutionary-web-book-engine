@@ -13,6 +13,26 @@ import {
 } from 'lucide-react';
 import type { EvolutionState, WebPageGenotype } from '../types';
 
+const QUERY_PREVIEW_LINE_THRESHOLD = 4;
+
+function getRenderedTextareaLineCount(element: HTMLTextAreaElement): number {
+  const style = window.getComputedStyle(element);
+  const computedLineHeight = Number.parseFloat(style.lineHeight);
+  const computedFontSize = Number.parseFloat(style.fontSize);
+  const lineHeight = Number.isFinite(computedLineHeight)
+    ? computedLineHeight
+    : computedFontSize * 1.2;
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
+  const contentHeight = Math.max(0, element.scrollHeight - paddingTop - paddingBottom);
+
+  if (!lineHeight || contentHeight <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.ceil((contentHeight - 1) / lineHeight));
+}
+
 interface ControlSidebarProps {
   query: string;
   onQueryChange: (value: string) => void;
@@ -39,8 +59,8 @@ export function ControlSidebar({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const artifactsRef = useRef<HTMLElement>(null);
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  const [isHoveringInput, setIsHoveringInput] = useState(false);
+  const [shouldShowQueryPreview, setShouldShowQueryPreview] = useState(false);
+  const [isQueryPreviewActive, setIsQueryPreviewActive] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState<'top' | 'bottom'>('top');
 
   useEffect(() => {
@@ -53,11 +73,11 @@ export function ControlSidebar({
   }, [showArtifacts]);
 
   useEffect(() => {
-    if (isHoveringInput && formRef.current) {
+    if (isQueryPreviewActive && formRef.current) {
       const rect = formRef.current.getBoundingClientRect();
       setTooltipPosition(rect.top < 320 ? 'bottom' : 'top');
     }
-  }, [isHoveringInput, query]);
+  }, [isQueryPreviewActive, query, shouldShowQueryPreview]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -67,25 +87,59 @@ export function ControlSidebar({
   }, [query]);
 
   useEffect(() => {
-    if (textareaRef.current && query) {
-      const element = textareaRef.current;
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      if (context) {
-        const style = window.getComputedStyle(element);
-        context.font = style.font;
-        const metrics = context.measureText(query);
-        const textWidth = metrics.width;
-        const paddingLeft = Number.parseFloat(style.paddingLeft);
-        const paddingRight = Number.parseFloat(style.paddingRight);
-        const availableWidth = element.clientWidth - paddingLeft - paddingRight;
-        setIsOverflowing(textWidth > availableWidth);
-        return;
-      }
+    const element = textareaRef.current;
+    if (!element) {
+      setShouldShowQueryPreview(false);
+      return undefined;
     }
 
-    setIsOverflowing(false);
+    const updateQueryPreviewState = () => {
+      const trimmedQuery = query.trim();
+      if (!trimmedQuery) {
+        setShouldShowQueryPreview(false);
+        return;
+      }
+
+      const renderedLineCount = getRenderedTextareaLineCount(element);
+      setShouldShowQueryPreview(renderedLineCount >= QUERY_PREVIEW_LINE_THRESHOLD);
+    };
+
+    updateQueryPreviewState();
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => updateQueryPreviewState())
+      : null;
+
+    resizeObserver?.observe(element);
+    window.addEventListener('resize', updateQueryPreviewState);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updateQueryPreviewState);
+    };
   }, [query]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (textareaRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsQueryPreviewActive(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, []);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -114,14 +168,9 @@ export function ControlSidebar({
           ref={formRef}
           onSubmit={(event) => void handleSubmit(event)}
           className="relative"
-          onMouseEnter={() => setIsHoveringInput(true)}
-          onMouseLeave={() => setIsHoveringInput(false)}
-          onFocus={() => setIsHoveringInput(true)}
-          onBlur={() => setIsHoveringInput(false)}
-          onClick={() => setIsHoveringInput(true)}
         >
           <AnimatePresence>
-            {isOverflowing && isHoveringInput && query && (
+            {shouldShowQueryPreview && isQueryPreviewActive && query && (
               <motion.div
                 initial={{ opacity: 0, y: tooltipPosition === 'top' ? 10 : -10, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -134,7 +183,7 @@ export function ControlSidebar({
                   </div>
                   <div className="leading-relaxed">{query}</div>
                   <div className="mt-2 text-[9px] opacity-40 italic">
-                    Text exceeds box width. Showing full query for accessibility.
+                    Query spans four or more rendered lines. Showing full preview for accessibility.
                   </div>
                 </div>
                 <div className={`absolute ${tooltipPosition === 'top' ? '-bottom-2 border-r-2 border-b-2' : '-top-2 border-l-2 border-t-2'} left-8 w-4 h-4 bg-yellow-300 border-[#141414] rotate-45`} />
@@ -151,6 +200,10 @@ export function ControlSidebar({
             className="w-full bg-[#F5F5F5] border border-[#141414] p-4 pr-14 focus:outline-none focus:ring-0 text-base sm:text-lg font-mono resize-none overflow-y-auto max-h-40"
             style={{ height: 'auto', minHeight: '84px' }}
             disabled={isBusy}
+            onMouseEnter={() => setIsQueryPreviewActive(true)}
+            onFocus={() => setIsQueryPreviewActive(true)}
+            onClick={() => setIsQueryPreviewActive(true)}
+            onBlur={() => setIsQueryPreviewActive(false)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
