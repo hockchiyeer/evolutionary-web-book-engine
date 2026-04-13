@@ -54,7 +54,7 @@ const MIN_USABLE_SOURCE_WORD_COUNT = 35;
 const MIN_USABLE_SEARCH_SOURCE_COUNT = 1;
 const GEMINI_RECONNECT_ATTEMPTS = 5;
 const GEMINI_RETRY_INITIAL_DELAY_MS = 2000;
-const GEMINI_REQUEST_TIMEOUT_MS = 30000;
+const GEMINI_REQUEST_TIMEOUT_MS = 90000; // 90 s — accommodates AI Studio Cloud Run latency
 const GEMINI_MISSING_KEY_PATTERNS = [
   /\bgemini[_\s-]*api[_\s-]*key[_\s-]*missing\b/i,
   /\bapi[_\s-]*key[_\s-]*missing\b/i,
@@ -1051,68 +1051,36 @@ async function enrichGeminiSearchResult(
 }
 
 /**
- * Two-phase Gemini search extraction.
+ * Single-phase Gemini search extraction.
  *
- * IMPORTANT: The Gemini API does NOT allow combining `googleSearch` grounding with
- * `responseMimeType: 'application/json'` or `responseSchema` in the same request.
- * These features are mutually exclusive and the combination returns an API error.
+ * Uses Google Search grounding and structured JSON output in a single request —
+ * the same proven approach as the canonical AI Studio reference implementation.
+ * `gemini-2.0-flash` supports combining `tools: [{ googleSearch: {} }]` with
+ * `responseMimeType: 'application/json'` and `responseSchema`, returning grounded
+ * citations directly as structured data without a separate extraction pass.
  *
- * Phase 1 — grounding call: uses `tools: [{ googleSearch: {} }]` with NO responseSchema.
- *            Returns plain text with grounded citations from live Google Search.
- * Phase 2 — extraction call: takes the grounded plain text as input and returns
- *            structured JSON using `responseMimeType` + `responseSchema` (no grounding tool).
+ * Benefits over the former two-phase design:
+ *  - Half the Gemini quota cost per search
+ *  - Half the timeout exposure (one 90 s window instead of two)
+ *  - URL fidelity: URLs come from the grounding response, not inferred by the model
  */
 async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtractResult> {
   const ai = getAI();
 
-  // ── Phase 1: Google Search grounding (plain-text only — no JSON schema here) ──
-  const groundingResponse = await withRetry(() => ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: GEMINI_MODEL,
     contents: `Search for comprehensive information about "${query}".
     Identify 16-24 distinct high-quality web pages or sources covering the topic from foundational,
     practical, historical, policy, comparative, and advanced perspectives.
     Diversify across multiple credible domains — cap any single domain at two results and prefer
     academic, government, nonprofit, standards, industry, and reputable journalism sources.
-    For each source report: its URL, title, a content summary (3+ sentences), key definitions,
+    For each source provide: URL, title, a 3+ sentence content summary, key definitions,
     salient sub-topics, an informative value score (0-1), and an authority score (0-1).`,
     config: {
-      systemInstruction: 'You are a precise research assistant. Use Google Search to find real, credible, domain-diverse sources. Report only what the search reveals — do not fabricate URLs, statistics, or definitions.',
-      // googleSearch grounding MUST NOT be combined with responseSchema or responseMimeType.
+      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Extract only meaningful definitions and sub-topics. Do not fabricate URLs, statistics, random numbers, or placeholder text. If no meaningful definitions exist for a source, return an empty array.',
       tools: [{ googleSearch: {} }],
-      maxOutputTokens: 8192,
-    },
-  }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, 'Gemini search grounding');
-
-  const groundedText = (groundingResponse.text || '').trim();
-  const rawGroundingChunks = (
-    groundingResponse.candidates?.[0]?.groundingMetadata as { groundingChunks?: SearchArtifact[] } | undefined
-  )?.groundingChunks || [];
-
-  if (!groundedText) {
-    return {
-      results: [],
-      artifacts: { groundingChunks: rawGroundingChunks },
-      sourceMode: 'gemini',
-    };
-  }
-
-  // ── Phase 2: Structured JSON extraction from grounded text (no grounding tool) ─
-  const extractionResponse = await withRetry(() => ai.models.generateContent({
-    model: GEMINI_MODEL_LITE,
-    contents: `Extract structured source data from the following research text about "${query}".
-
-Research text:
-${groundedText.substring(0, 12000)}
-
-Return a JSON array of source objects. For each source identified in the research text, produce an
-object with: url (string), title (string), content (string — 3+ sentence summary), definitions
-(array of {term, description}), subTopics (array of {title, summary}), informativeScore
-(number 0-1), authorityScore (number 0-1). Include 10-24 sources. If a URL is not clearly stated,
-infer a plausible canonical URL from the domain context in the text.`,
-    config: {
-      systemInstruction: 'You are a precise data extractor. Output valid JSON only. Extract only real, meaningful definitions and sub-topics from the provided research text. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
       responseMimeType: 'application/json',
-      maxOutputTokens: 14000,
+      maxOutputTokens: 12000,
       responseSchema: {
         type: Type.ARRAY,
         items: {
@@ -1150,9 +1118,13 @@ infer a plausible canonical URL from the domain context in the text.`,
         },
       },
     },
-  }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, 'Gemini search extraction');
+  }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, 'Gemini search');
 
-  const rawText = (extractionResponse.text || '').trim();
+  const rawText = (response.text || '').trim();
+  const rawGroundingChunks = (
+    response.candidates?.[0]?.groundingMetadata as { groundingChunks?: SearchArtifact[] } | undefined
+  )?.groundingChunks || [];
+
   if (!rawText) {
     return {
       results: [],

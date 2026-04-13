@@ -4,7 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv } from 'vite';
 import { googleSearchFallbackPlugin } from './server/googleSearchFallback.ts';
-import { generatePdf } from './server/pdfBridge.ts';
+// pdfBridge is loaded lazily inside the middleware handler so that a missing
+// puppeteer devDependency does not crash the vite preview/dev server on startup.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,11 +77,12 @@ function serverFileRestartPlugin() {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
-  const geminiApiKey = typeof env.GEMINI_API_KEY === 'string' && env.GEMINI_API_KEY.trim().length > 0
-    ? env.GEMINI_API_KEY.trim()
-    : typeof env.VITE_GEMINI_API_KEY === 'string' && env.VITE_GEMINI_API_KEY.trim().length > 0
-      ? env.VITE_GEMINI_API_KEY.trim()
-      : 'process.env.GEMINI_API_KEY';
+  // Resolve the Gemini API key the same way the canonical AI Studio reference
+  // implementation does: if no real key is found, emit JSON.stringify(undefined)
+  // so the process.env.GEMINI_API_KEY reference in the bundle remains as
+  // `undefined` — a runtime expression that AI Studio can satisfy via its
+  // build-time key injection, rather than a hardcoded placeholder string.
+  const resolvedApiKey = env.GEMINI_API_KEY?.trim() || env.VITE_GEMINI_API_KEY?.trim() || undefined;
   const previewPort = resolvePort(process.env.PORT || env.PORT, 3000);
   const disableHmr = process.env.DISABLE_HMR === 'true'
     || env.DISABLE_HMR === 'true'
@@ -107,6 +109,18 @@ export default defineConfig(({ mode }) => {
               });
               req.on('end', async () => {
                 const { html, fileName } = JSON.parse(body);
+                // Lazy import so puppeteer absence (devDep) does not crash startup.
+                let generatePdf: ((h: string) => Promise<Buffer>) | null = null;
+                try {
+                  const bridge = await import('./server/pdfBridge.ts');
+                  generatePdf = bridge.generatePdf;
+                } catch {
+                  /* puppeteer not installed — PDF generation unavailable */
+                }
+                if (!generatePdf) {
+                  res.statusCode = 503;
+                  return res.end('PDF generation unavailable: puppeteer is not installed.');
+                }
                 const pdfBuffer = await generatePdf(html);
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader(
@@ -135,6 +149,18 @@ export default defineConfig(({ mode }) => {
               });
               req.on('end', async () => {
                 const { html, fileName } = JSON.parse(body);
+                // Lazy import so puppeteer absence (devDep) does not crash startup.
+                let generatePdf: ((h: string) => Promise<Buffer>) | null = null;
+                try {
+                  const bridge = await import('./server/pdfBridge.ts');
+                  generatePdf = bridge.generatePdf;
+                } catch {
+                  /* puppeteer not installed — PDF generation unavailable */
+                }
+                if (!generatePdf) {
+                  res.statusCode = 503;
+                  return res.end('PDF generation unavailable: puppeteer is not installed.');
+                }
                 const pdfBuffer = await generatePdf(html);
                 res.setHeader('Content-Type', 'application/pdf');
                 res.setHeader(
@@ -153,7 +179,10 @@ export default defineConfig(({ mode }) => {
       },
     ],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey),
+      // When resolvedApiKey is undefined, JSON.stringify emits undefined and
+      // Vite/esbuild leave the process.env.GEMINI_API_KEY expression as a
+      // runtime reference — matching the AI Studio reference implementation.
+      'process.env.GEMINI_API_KEY': JSON.stringify(resolvedApiKey),
     },
     resolve: {
       alias: {
