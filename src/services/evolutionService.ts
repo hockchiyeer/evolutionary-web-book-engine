@@ -37,8 +37,8 @@ export interface SearchAndExtractResult {
   fallbackPayload?: SearchFallbackPayload;
 }
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
-const GEMINI_MODEL_LITE = 'gemini-2.0-flash-lite';
+const GEMINI_SEARCH_MODEL = 'gemini-3-flash-preview';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 const AI_STUDIO_GEMINI_API_KEY_PLACEHOLDER = 'process.env.GEMINI_API_KEY';
 export const CONSOLIDATED_SOURCE_POOL_SIZE = 48;
 export const ASSEMBLY_SOURCE_POOL_SIZE = 18;
@@ -54,7 +54,7 @@ const MIN_USABLE_SOURCE_WORD_COUNT = 35;
 const MIN_USABLE_SEARCH_SOURCE_COUNT = 1;
 const GEMINI_RECONNECT_ATTEMPTS = 5;
 const GEMINI_RETRY_INITIAL_DELAY_MS = 2000;
-const GEMINI_REQUEST_TIMEOUT_MS = 90000; // 90 s — accommodates AI Studio Cloud Run latency
+const GEMINI_REQUEST_TIMEOUT_MS = 30000;
 const GEMINI_MISSING_KEY_PATTERNS = [
   /\bgemini[_\s-]*api[_\s-]*key[_\s-]*missing\b/i,
   /\bapi[_\s-]*key[_\s-]*missing\b/i,
@@ -911,6 +911,18 @@ function mergeSearchArtifacts(primary: SearchArtifact[], supplemental: SearchArt
   return merged;
 }
 
+function buildSearchArtifactsFromPopulation(results: WebPageGenotype[]): SearchArtifact[] {
+  return results
+    .filter((result) => Boolean(result.url) && Boolean(result.title))
+    .map((result) => ({
+      web: {
+        title: result.title,
+        uri: result.url,
+      },
+      snippet: result.content.slice(0, 240),
+    }));
+}
+
 function buildFallbackPopulation(payload: SearchFallbackPayload): WebPageGenotype[] {
   const searchUrl = buildSearchUrl(payload.query, payload.provider);
   const distinctResults = selectDistinctFallbackResults(payload.results, CONSOLIDATED_SOURCE_POOL_SIZE - 1);
@@ -1053,34 +1065,28 @@ async function enrichGeminiSearchResult(
 /**
  * Single-phase Gemini search extraction.
  *
- * Uses Google Search grounding and structured JSON output in a single request —
- * the same proven approach as the canonical AI Studio reference implementation.
- * `gemini-2.0-flash` supports combining `tools: [{ googleSearch: {} }]` with
- * `responseMimeType: 'application/json'` and `responseSchema`, returning grounded
- * citations directly as structured data without a separate extraction pass.
+ * Gemini 3 preview supports combining Google Search grounding with structured
+ * JSON output. This matches the legacy AI Studio implementation that was
+ * reported as stable and avoids the failure-prone two-step extraction path.
  *
- * Benefits over the former two-phase design:
- *  - Half the Gemini quota cost per search
- *  - Half the timeout exposure (one 90 s window instead of two)
- *  - URL fidelity: URLs come from the grounding response, not inferred by the model
  */
 async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtractResult> {
   const ai = getAI();
 
-  const response = await withRetry(() => ai.models.generateContent({
-    model: GEMINI_MODEL,
+  const singlePhaseResponse = await withRetry(() => ai.models.generateContent({
+    model: GEMINI_SEARCH_MODEL,
     contents: `Search for comprehensive information about "${query}".
-    Identify 16-24 distinct high-quality web pages or sources covering the topic from foundational,
-    practical, historical, policy, comparative, and advanced perspectives.
+    Identify 10-24 distinct high-quality web pages or sources covering the topic from foundational,
+    practical, historical, comparative, and advanced perspectives.
     Diversify across multiple credible domains — cap any single domain at two results and prefer
     academic, government, nonprofit, standards, industry, and reputable journalism sources.
-    For each source provide: URL, title, a 3+ sentence content summary, key definitions,
+    For each source report: its URL, title, a content summary (3+ sentences), key definitions,
     salient sub-topics, an informative value score (0-1), and an authority score (0-1).`,
     config: {
-      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Extract only meaningful definitions and sub-topics. Do not fabricate URLs, statistics, random numbers, or placeholder text. If no meaningful definitions exist for a source, return an empty array.',
+      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Output valid JSON only. Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
       tools: [{ googleSearch: {} }],
       responseMimeType: 'application/json',
-      maxOutputTokens: 12000,
+      maxOutputTokens: 8192,
       responseSchema: {
         type: Type.ARRAY,
         items: {
@@ -1118,34 +1124,37 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
         },
       },
     },
-  }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, 'Gemini search');
+  }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, 'Gemini search grounding/extraction');
 
-  const rawText = (response.text || '').trim();
-  const rawGroundingChunks = (
-    response.candidates?.[0]?.groundingMetadata as { groundingChunks?: SearchArtifact[] } | undefined
+  const singlePhaseRawText = (singlePhaseResponse.text || '').trim();
+  const singlePhaseGroundingChunks = (
+    singlePhaseResponse.candidates?.[0]?.groundingMetadata as { groundingChunks?: SearchArtifact[] } | undefined
   )?.groundingChunks || [];
 
-  if (!rawText) {
+  if (!singlePhaseRawText) {
     return {
       results: [],
-      artifacts: { groundingChunks: rawGroundingChunks },
+      artifacts: { groundingChunks: singlePhaseGroundingChunks },
       sourceMode: 'gemini',
     };
   }
 
-  const results = parseJsonResponse<any[]>(rawText, 'The search engine returned an invalid response. Please try a different query.');
-  if (!Array.isArray(results)) {
+  const singlePhaseResults = parseJsonResponse<any[]>(
+    singlePhaseRawText,
+    'The search engine returned an invalid response. Please try a different query.'
+  );
+  if (!Array.isArray(singlePhaseResults)) {
     return {
       results: [],
-      artifacts: { groundingChunks: rawGroundingChunks },
+      artifacts: { groundingChunks: singlePhaseGroundingChunks },
       sourceMode: 'gemini',
     };
   }
 
-  const processedResults = selectDistinctPopulationPages(results.map((result: any, index: number) => ({
+  const processedSinglePhaseResults = selectDistinctPopulationPages(singlePhaseResults.map((result: any, index: number) => ({
     ...result,
     id: `gen-${index}-${Date.now()}`,
-    content: result.content ? String(result.content).substring(0, 1600) : '',
+    content: result.content ? String(result.content).substring(0, 2000) : '',
     definitions: getRenderableDefinitions(
       (result.definitions || []).map((definition: any) => ({ ...definition, sourceUrl: result.url })),
       8
@@ -1157,10 +1166,15 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
   })), CONSOLIDATED_SOURCE_POOL_SIZE);
 
   return {
-    results: processedResults,
-    artifacts: { groundingChunks: rawGroundingChunks },
+    results: processedSinglePhaseResults,
+    artifacts: {
+      groundingChunks: singlePhaseGroundingChunks.length > 0
+        ? singlePhaseGroundingChunks
+        : buildSearchArtifactsFromPopulation(processedSinglePhaseResults),
+    },
     sourceMode: 'gemini',
   };
+
 }
 
 
@@ -1177,10 +1191,10 @@ export async function searchAndExtract(
       throw error;
     }
 
-    // When fallback is disabled ('off'), surface the Gemini error directly
-    // without attempting any fallback search pipeline.
+    // When fallback is disabled ('off'), surface the Gemini failure directly
+    // without wrapping it in a fallback-specific message.
     if (options.mode === 'off') {
-      throw buildUnavailableFallbackSearchError(query, fallbackReason, options.mode);
+      throw error instanceof Error ? error : new Error(formatGeminiError(error));
     }
 
     const fallbackPayload = await safeFetchSearchFallback(query, 'Gemini search recovery', options);
@@ -2402,8 +2416,12 @@ export async function assembleWebBook(
       throw error;
     }
 
+    if (options.mode === 'off') {
+      throw error instanceof Error ? error : new Error(formatGeminiError(error));
+    }
+
     let fallbackPayload = context?.fallbackPayload;
-    if (!fallbackPayload && options.mode !== 'off') {
+    if (!fallbackPayload) {
       fallbackPayload = await safeFetchSearchFallback(
         topic,
         incompleteGeminiOutput ? 'Gemini assembly completeness recovery' : 'Gemini assembly recovery',

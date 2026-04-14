@@ -612,11 +612,11 @@ function buildSummary(query: string, aiOverview: string[], results: SearchFallba
   return `Search results for ${query} highlighted these sources: ${titles}.`;
 }
 
-function isGoogleBlockedPage(html: string): boolean {
+export function isGoogleBlockedPage(html: string): boolean {
   const normalized = stripHtmlToText(html).toLowerCase();
   return (
-    normalized.includes('about this page') ||
     normalized.includes('unusual traffic from your computer network') ||
+    normalized.includes('our systems have detected unusual traffic') ||
     normalized.includes('detected unusual traffic') ||
     normalized.includes('not a robot') ||
     normalized.includes('please click here if you are not redirected within a few seconds')

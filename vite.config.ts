@@ -34,6 +34,8 @@ function isAiStudioHostedApp(appUrl: string | undefined): boolean {
   }
 }
 
+const AI_STUDIO_GEMINI_API_KEY_PLACEHOLDER = 'process.env.GEMINI_API_KEY';
+
 function serverFileRestartPlugin() {
   let isRestarting = false;
   const watchedRoots = [
@@ -77,12 +79,12 @@ function serverFileRestartPlugin() {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
-  // Resolve the Gemini API key the same way the canonical AI Studio reference
-  // implementation does: if no real key is found, emit JSON.stringify(undefined)
-  // so the process.env.GEMINI_API_KEY reference in the bundle remains as
-  // `undefined` — a runtime expression that AI Studio can satisfy via its
-  // build-time key injection, rather than a hardcoded placeholder string.
-  const resolvedApiKey = env.GEMINI_API_KEY?.trim() || env.VITE_GEMINI_API_KEY?.trim() || undefined;
+  // AI Studio expects the literal placeholder string `process.env.GEMINI_API_KEY`
+  // in client-side code so its proxy can attach the active user's key without
+  // exposing a real secret in the bundle.
+  const resolvedApiKey = env.GEMINI_API_KEY?.trim()
+    || env.VITE_GEMINI_API_KEY?.trim()
+    || AI_STUDIO_GEMINI_API_KEY_PLACEHOLDER;
   const previewPort = resolvePort(process.env.PORT || env.PORT, 3000);
   const disableHmr = process.env.DISABLE_HMR === 'true'
     || env.DISABLE_HMR === 'true'
@@ -179,9 +181,8 @@ export default defineConfig(({ mode }) => {
       },
     ],
     define: {
-      // When resolvedApiKey is undefined, JSON.stringify emits undefined and
-      // Vite/esbuild leave the process.env.GEMINI_API_KEY expression as a
-      // runtime reference — matching the AI Studio reference implementation.
+      // Preserve the documented AI Studio placeholder when no real key is
+      // configured at build time, rather than compiling the expression away.
       'process.env.GEMINI_API_KEY': JSON.stringify(resolvedApiKey),
     },
     resolve: {
