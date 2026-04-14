@@ -12,6 +12,7 @@ import type {
   WebPageGenotype,
 } from '../types';
 import { fetchGoogleSearchFallback } from './googleSearchFallbackClient';
+import { GEMINI_REQUEST_TIMEOUT_MS, buildGeminiUserFacingErrorMessage } from './geminiUserFacingErrors';
 import { getRenderableDefinitions, getRenderableSubTopics, isMeaningfulText } from '../utils/webBookRender';
 import {
   buildFallbackOverviewTitle,
@@ -54,7 +55,6 @@ const MIN_USABLE_SOURCE_WORD_COUNT = 35;
 const MIN_USABLE_SEARCH_SOURCE_COUNT = 1;
 const GEMINI_RECONNECT_ATTEMPTS = 5;
 const GEMINI_RETRY_INITIAL_DELAY_MS = 2000;
-const GEMINI_REQUEST_TIMEOUT_MS = 30000;
 const GEMINI_MISSING_KEY_PATTERNS = [
   /\bgemini[_\s-]*api[_\s-]*key[_\s-]*missing\b/i,
   /\bapi[_\s-]*key[_\s-]*missing\b/i,
@@ -62,6 +62,9 @@ const GEMINI_MISSING_KEY_PATTERNS = [
 ];
 const GEMINI_INVALID_KEY_PATTERNS = [
   /\bapi[_\s-]*key[_\s-]*invalid\b/i,
+  /\bapi[_\s-]*key\b.{0,20}\bnot\b.{0,10}\bvalid\b/i,
+  /\bapi[_\s-]*key[_\s-]*rejected\b/i,
+  /\bapi_key_invalid\b/i,
   /\binvalid[_\s-]*api[_\s-]*key\b/i,
   /\bunauthori[sz]ed\b/i,
   /\bforbidden\b/i,
@@ -274,6 +277,10 @@ function formatGeminiError(error: unknown): string {
   return uniqueSegments.length > 0 ? uniqueSegments.join(' | ') : 'Unknown Gemini API error';
 }
 
+function buildGeminiOnlyModeError(error: unknown): Error {
+  return new Error(buildGeminiUserFacingErrorMessage(error, classifyGeminiError(error)));
+}
+
 function isGeminiRetryableError(error: unknown): boolean {
   const errorMessage = formatGeminiError(error);
   const status = (error as any)?.status;
@@ -307,6 +314,10 @@ function isGeminiRetryableError(error: unknown): boolean {
 }
 
 async function withTimeout<T>(promiseFactory: () => Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return promiseFactory();
+  }
+
   return new Promise<T>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       reject(new Error(`${timeoutLabel} timed out after ${timeoutMs}ms`));
@@ -539,7 +550,17 @@ function buildIncompleteGeminiFallbackNotice(hasLiveFallback: boolean): string {
   return 'Gemini returned an incomplete chapter set, so the Web-book was rebuilt from the current evidence pool only.';
 }
 
-function buildEmptySearchEvidenceNotice(query: string): Error {
+function buildEmptySearchEvidenceNotice(
+  query: string,
+  mode: SearchFallbackOptions['mode'] = 'google_duckduckgo'
+): Error {
+  if (mode === 'off') {
+    return new Error(
+      `Gemini search returned no usable external sources for "${query}". ` +
+      'Fallback recovery is disabled in Gemini-only mode, so the run stopped without switching to Google or DuckDuckGo.'
+    );
+  }
+
   return new Error(
     `Gemini search returned no usable external sources for "${query}", and live fallback search could not be reached. ` +
     'The app needs either Gemini search evidence or the /api/search-fallback route to continue.'
@@ -1003,7 +1024,7 @@ async function enrichGeminiSearchResult(
   // the Gemini result as-is (or throw if Gemini itself had no usable evidence).
   if (options.mode === 'off') {
     if (!geminiHasUsableEvidence) {
-      throw buildEmptySearchEvidenceNotice(query);
+      throw buildEmptySearchEvidenceNotice(query, options.mode);
     }
     return {
       ...geminiResult,
@@ -1035,7 +1056,7 @@ async function enrichGeminiSearchResult(
     }
 
     if (!geminiHasUsableEvidence && !fallbackHasUsableEvidence) {
-      throw buildEmptySearchEvidenceNotice(query);
+      throw buildEmptySearchEvidenceNotice(query, options.mode);
     }
 
     return {
@@ -1053,7 +1074,7 @@ async function enrichGeminiSearchResult(
   } catch (error) {
     console.warn('Gemini enrichment with live search evidence was unavailable', error);
     if (!geminiHasUsableEvidence) {
-      throw buildEmptySearchEvidenceNotice(query);
+      throw buildEmptySearchEvidenceNotice(query, options.mode);
     }
     return {
       ...geminiResult,
@@ -1188,13 +1209,17 @@ export async function searchAndExtract(
   } catch (error) {
     const fallbackReason = classifyGeminiError(error);
     if (!fallbackReason) {
+      if (options.mode === 'off') {
+        throw buildGeminiOnlyModeError(error);
+      }
+
       throw error;
     }
 
     // When fallback is disabled ('off'), surface the Gemini failure directly
     // without wrapping it in a fallback-specific message.
     if (options.mode === 'off') {
-      throw error instanceof Error ? error : new Error(formatGeminiError(error));
+      throw buildGeminiOnlyModeError(error);
     }
 
     const fallbackPayload = await safeFetchSearchFallback(query, 'Gemini search recovery', options);
@@ -2413,11 +2438,15 @@ export async function assembleWebBook(
     const fallbackReason = classifyGeminiError(error);
     const incompleteGeminiOutput = isGeminiOutputIncomplete(error);
     if (!fallbackReason && !incompleteGeminiOutput) {
+      if (options.mode === 'off') {
+        throw buildGeminiOnlyModeError(error);
+      }
+
       throw error;
     }
 
     if (options.mode === 'off') {
-      throw error instanceof Error ? error : new Error(formatGeminiError(error));
+      throw buildGeminiOnlyModeError(error);
     }
 
     let fallbackPayload = context?.fallbackPayload;

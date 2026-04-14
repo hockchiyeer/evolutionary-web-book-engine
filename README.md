@@ -356,7 +356,7 @@ When this app is hosted inside Google AI Studio, several console messages can ap
 Important runtime notes:
 
 - Current source from this repo uses direct Gemini browser calls plus `/api/search-fallback`.
-- The Gemini search call uses a 90-second per-request timeout (`GEMINI_REQUEST_TIMEOUT_MS`) to accommodate the additional latency of the AI Studio Cloud Run hop. Complex or long-running grounding queries that previously timed out at 30 seconds will now complete reliably.
+- The checked-in client no longer applies a hard per-request Gemini timeout (`GEMINI_REQUEST_TIMEOUT_MS = 0`), so long-running grounding and assembly requests are allowed to finish instead of aborting locally after a fixed cutoff.
 - Some AI Studio-hosted clients may still call `/api/search` or `/api/evolve`. The server now includes compatibility middleware for those legacy routes so older hosted wrappers can still function.
 - If the hosted app console shows `/api/search` or `/api/evolve` and the request still fails after redeploy, that usually means the host is still serving an older wrapper or an incomplete deployment.
 - Google AI Studio Build mode currently documents export-out workflows, but not importing a local app zip back into AI Studio as an editable project.

@@ -33,9 +33,17 @@ const FALLBACK_MODE_OPTIONS: Array<{
   },
   {
     value: 'off',
-    label: 'Off',
+    label: 'Off (Gemini only)',
   },
 ];
+
+function getFallbackModeHelperText(mode: SearchFallbackMode): string {
+  if (mode === 'off') {
+    return 'Gemini-only mode. No Google Search or DuckDuckGo recovery will run if Gemini search or extraction fails.';
+  }
+
+  return 'Used only if Gemini needs recovery or supplemental search evidence.';
+}
 
 function getRenderedTextareaLineCount(element: HTMLTextAreaElement): number {
   const style = window.getComputedStyle(element);
@@ -180,6 +188,7 @@ export function ControlSidebar({
     state.status === 'searching'  ? '25%'  : '0%';
   const progressText = state.status === 'complete' ? '100%' : progressWidthPct;
   const searchSummary = state.artifacts?.searchSummary;
+  const fallbackHelperText = getFallbackModeHelperText(fallbackMode);
 
   return (
     <div data-html2canvas-ignore="true" className="lg:col-span-4 space-y-8 print:hidden">
@@ -281,7 +290,7 @@ export function ControlSidebar({
             </div>
           </div>
           <p className="mt-2 text-[10px] opacity-45 leading-relaxed">
-            Used only if Gemini needs recovery or supplemental search evidence.
+            {fallbackHelperText}
           </p>
         </div>
       </section>
@@ -378,7 +387,9 @@ export function ControlSidebar({
           {error && (
             <div className="bg-red-50 border border-red-200 p-3 text-red-800 text-xs flex gap-2 items-start">
               <AlertCircle size={14} className="shrink-0 mt-0.5" />
-              <span>{error}</span>
+              <div className="min-w-0 flex-1 max-h-40 overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+                {error}
+              </div>
             </div>
           )}
         </div>
