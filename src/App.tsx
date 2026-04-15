@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { BookOpen, Dna, Loader2 } from 'lucide-react';
 import { AppHeader } from './components/AppHeader';
@@ -12,6 +12,7 @@ import { HistoryDrawer } from './components/HistoryDrawer';
 import { WebBookViewer } from './WebBookViewer';
 import { WebBookErrorBoundary } from './WebBookErrorBoundary';
 import { useWebBookEngine } from './hooks/useWebBookEngine';
+import { getWebBookDocumentTitle } from './services/documentTitle';
 import {
   exportWebBookToHtml,
   exportWebBookToPdf,
@@ -24,6 +25,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [showArtifacts, setShowArtifacts] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const {
     query,
     setQuery,
@@ -42,10 +44,18 @@ export default function App() {
   } = useWebBookEngine();
   const isBusy = state.status !== 'idle' && state.status !== 'complete';
 
+  useEffect(() => {
+    document.title = getWebBookDocumentTitle(webBook?.topic);
+  }, [webBook?.topic]);
+
   const runExport = async (action: () => Promise<void>) => {
     setIsExporting(true);
+    setExportError(null);
     try {
       await action();
+    } catch (err: any) {
+      console.error('Export failed:', err);
+      setExportError(err?.message || 'Export failed. Please try again or check the console for details.');
     } finally {
       setIsExporting(false);
     }
@@ -67,6 +77,15 @@ export default function App() {
       />
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 print:block print:p-0">
+        {exportError && (
+          <div className="lg:col-span-12 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4" role="alert">
+            <strong className="font-bold">Error! </strong>
+            <span className="block sm:inline">{exportError}</span>
+            <button className="absolute top-0 bottom-0 right-0 px-4 py-3" onClick={() => setExportError(null)}>
+              <span className="text-red-500 hover:text-red-700">×</span>
+            </button>
+          </div>
+        )}
         <ControlSidebar
           query={query}
           onQueryChange={setQuery}

@@ -1360,7 +1360,7 @@ async function handleLegacyEvolveRequest(request: IncomingMessage, response: Ser
   });
 }
 
-function createApiCompatibilityMiddleware() {
+export function createApiCompatibilityMiddleware() {
   return async (request: IncomingMessage, response: ServerResponse, next: (error?: unknown) => void) => {
     if (!request.url) {
       next();

@@ -1,5 +1,6 @@
 import type { WebBook } from '../types';
 import { buildWebBookDocx } from './docxExport';
+import { getWebBookDocumentTitle } from './documentTitle';
 import {
   buildPdfHtmlDocument,
   buildPrintHtmlDocument,
@@ -81,13 +82,69 @@ export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
 }
 
 export async function printWebBook(webBook: WebBook): Promise<void> {
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    alert('Please allow popups to use the print feature.');
-    return;
+  const { clone } = await prepareExportContent(getWebBookElement());
+  const htmlContent = buildPrintHtmlDocument(webBook, clone.outerHTML);
+  const printTitle = getWebBookDocumentTitle(webBook.topic);
+
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.title = printTitle;
+  iframe.name = printTitle;
+  document.body.appendChild(iframe);
+
+  const iframeWindow = iframe.contentWindow;
+  const iframeDoc = iframeWindow?.document;
+
+  if (!iframeWindow || !iframeDoc) {
+    document.body.removeChild(iframe);
+    throw new Error('Failed to create print frame.');
   }
 
-  const { clone } = await prepareExportContent(getWebBookElement());
-  printWindow.document.write(buildPrintHtmlDocument(webBook, clone.outerHTML));
-  printWindow.document.close();
+  const originalTitle = document.title;
+  document.title = printTitle;
+
+  let printDelayTimer = 0;
+  let cleanupFallbackTimer = 0;
+  let isCleanedUp = false;
+
+  const cleanup = () => {
+    if (isCleanedUp) {
+      return;
+    }
+
+    isCleanedUp = true;
+    window.clearTimeout(printDelayTimer);
+    window.clearTimeout(cleanupFallbackTimer);
+    window.removeEventListener('afterprint', cleanup);
+    iframeWindow.removeEventListener('afterprint', cleanup);
+    document.title = originalTitle;
+
+    if (iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
+    }
+  };
+
+  window.addEventListener('afterprint', cleanup);
+  iframeWindow.addEventListener('afterprint', cleanup);
+
+  iframeDoc.open();
+  iframeDoc.write(htmlContent);
+  iframeDoc.title = printTitle;
+
+  // Wait for resources to load in the iframe before printing
+  iframeWindow.onload = () => {
+    iframeWindow.document.title = printTitle;
+    cleanupFallbackTimer = window.setTimeout(cleanup, 300_000);
+    printDelayTimer = window.setTimeout(() => {
+      iframeWindow.focus();
+      iframeWindow.print();
+    }, 500);
+  };
+
+  iframeDoc.close();
 }

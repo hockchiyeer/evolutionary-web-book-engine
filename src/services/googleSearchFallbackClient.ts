@@ -2,7 +2,7 @@ import type { SearchFallbackMode, SearchFallbackOptions, SearchFallbackPayload }
 
 const SEARCH_FALLBACK_ROUTE = '/api/search-fallback';
 const FALLBACK_FETCH_ATTEMPTS = 3;
-const FALLBACK_FETCH_TIMEOUT_MS = 20000;
+const FALLBACK_FETCH_TIMEOUT_MS = 30000;
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

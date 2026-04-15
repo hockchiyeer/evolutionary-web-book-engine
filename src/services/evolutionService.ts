@@ -261,6 +261,16 @@ function pruneFallbackNarrativeContent(content: string): string {
 
 function formatGeminiError(error: unknown): string {
   const errorObject = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
+  
+  let jsonString = '';
+  if (errorObject && typeof error !== 'string') {
+    try {
+      jsonString = JSON.stringify(errorObject);
+    } catch {
+      jsonString = String(errorObject);
+    }
+  }
+
   const segments = [
     typeof error === 'string' ? error : '',
     String(errorObject?.message || ''),
@@ -268,7 +278,7 @@ function formatGeminiError(error: unknown): string {
     String(errorObject?.name || ''),
     String(errorObject?.code || ''),
     String(errorObject?.status || ''),
-    typeof error === 'string' ? '' : JSON.stringify(errorObject || {}),
+    jsonString,
   ]
     .map((segment) => segment.trim())
     .filter(Boolean);
@@ -278,7 +288,9 @@ function formatGeminiError(error: unknown): string {
 }
 
 function buildGeminiOnlyModeError(error: unknown): Error {
-  return new Error(buildGeminiUserFacingErrorMessage(error, classifyGeminiError(error)));
+  const reason = classifyGeminiError(error);
+  const message = buildGeminiUserFacingErrorMessage(error, reason);
+  return new Error(message || 'Unknown Gemini API error');
 }
 
 function isGeminiRetryableError(error: unknown): boolean {
@@ -508,10 +520,7 @@ function buildFallbackNoticeFromPayload(
   reason: SearchFallbackReason,
   payload: SearchFallbackPayload
 ): string {
-  const baseNotice = buildFallbackNotice(reason, payload.source, payload.provider);
-  return hasDuckDuckGoFallbackEvidence(payload)
-    ? `${baseNotice} DuckDuckGo alternate search results were also blended into the fallback evidence set.`
-    : baseNotice;
+  return buildFallbackNotice(reason, payload.source, payload.provider);
 }
 
 async function safeFetchSearchFallback(

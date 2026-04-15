@@ -1,5 +1,6 @@
 import type { WebBook } from '../types';
 import type { DocxChapterImageAsset } from './docxExport';
+import { getWebBookDocumentTitle } from './documentTitle';
 
 const EXPORT_CLEANUP_SELECTOR = 'button, .print\\:hidden, [data-html2canvas-ignore]';
 const EXPORT_FONT_LINKS = '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">';
@@ -190,7 +191,7 @@ function buildHtmlShell(title: string, htmlContent: string, headContent: string,
 
 export function buildStandaloneHtmlDocument(webBook: WebBook, htmlContent: string): string {
   return buildHtmlShell(
-    webBook.topic,
+    getWebBookDocumentTitle(webBook.topic),
     htmlContent,
     `
       <style>
@@ -215,7 +216,7 @@ export function buildStandaloneHtmlDocument(webBook: WebBook, htmlContent: strin
 
 export function buildPdfHtmlDocument(webBook: WebBook, htmlContent: string): string {
   return buildHtmlShell(
-    webBook.topic,
+    getWebBookDocumentTitle(webBook.topic),
     htmlContent,
     `
       <style>
@@ -267,15 +268,8 @@ export function buildPdfHtmlDocument(webBook: WebBook, htmlContent: string): str
 
 export function buildPrintHtmlDocument(webBook: WebBook, htmlContent: string): string {
   return buildHtmlShell(
-    webBook.topic,
-    `${htmlContent}
-      <script>
-        window.onload = () => {
-          setTimeout(() => {
-            window.print();
-          }, 1000);
-        };
-      </script>`,
+    getWebBookDocumentTitle(webBook.topic),
+    htmlContent,
     `
       <style>
         html { scroll-behavior: smooth; }
