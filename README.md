@@ -77,25 +77,33 @@ This repository now includes:
 |-- package.json
 |-- tsconfig.json
 |-- vite.config.ts
+|-- scripts
+|   |-- package-google-ai-studio.mjs
+|   `-- start-preview.mjs
 |-- server
 |   |-- googleSearchFallback.ts
-|   `-- pdfBridge.ts
+|   |-- pdfBridge.ts
+|   `-- server.ts
 `-- src
     |-- App.tsx
     |-- index.css
     |-- main.tsx
     |-- types.ts
+    |-- WebBookErrorBoundary.tsx
+    |-- WebBookViewer.tsx
     |-- components
     |   |-- AppHeader.tsx
     |   |-- ControlSidebar.tsx
-    |   |-- HistoryDrawer.tsx
-    |   `-- WebBookViewer.tsx
+    |   `-- HistoryDrawer.tsx
     |-- hooks
     |   `-- useWebBookEngine.ts
     |-- services
+    |   |-- documentTitle.ts
     |   |-- docxExport.ts
     |   |-- evolutionService.ts
+    |   |-- exportDocument.ts
     |   |-- exportService.ts
+    |   |-- geminiUserFacingErrors.ts
     |   |-- googleSearchFallbackClient.ts
     |   |-- historyService.ts
     |   `-- searchFallbackShared.ts
@@ -228,17 +236,13 @@ tests/
     |   |   |-- given.js
     |   |   |-- when.js
     |   |   `-- then.js
-    |   `-- pageObjects/
+    |   `-- pageObjects/              ← imported by support/commands.js
     |       |-- index.js
     |       `-- webBookEngine.js
-    |-- features/                     ← empty legacy directory (unused)
     |-- fixtures/
     |   |-- 1x1.png
     |   |-- example.json
     |   `-- search-fallback-quantum-physics.json
-    |-- pageObjects/                  ← imported by support/commands.js
-    |   |-- index.js
-    |   `-- webBookEngine.js
     `-- support/
         |-- e2e.js
         `-- commands.js
