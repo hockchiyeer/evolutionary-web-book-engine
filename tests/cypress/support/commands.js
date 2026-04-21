@@ -2,13 +2,13 @@
 // Custom Cypress commands for Evolutionary Web-Book Engine
 // ***********************************************
 
-import { objects } from '../pageObjects';
+import { objects } from '../e2e/pageObjects';
 
 const SEARCH_FALLBACK_ROUTE = '**/api/search-fallback*';
-const PDF_EXPORT_ROUTE      = '**/__pdf';
-const PICSUM_ROUTE          = '**/picsum.photos/**';
-const FONTS_GOOGLE_ROUTE    = '**/fonts.googleapis.com/**';
-const FONTS_GSTATIC_ROUTE   = '**/fonts.gstatic.com/**';
+const PDF_EXPORT_ROUTE = '**/__pdf';
+const PICSUM_ROUTE = '**/picsum.photos/**';
+const FONTS_GOOGLE_ROUTE = '**/fonts.googleapis.com/**';
+const FONTS_GSTATIC_ROUTE = '**/fonts.gstatic.com/**';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -27,7 +27,7 @@ function isXPath(locatorStr) {
 }
 
 function getElement(page_name, locator_name) {
-  const page       = page_name.replace(/\s+/g, '');
+  const page = page_name.replace(/\s+/g, '');
   const locatorKey = locator_name.replaceAll(' ', '_');
 
   if (!objects[page] || !objects[page][locatorKey]) {
@@ -37,7 +37,7 @@ function getElement(page_name, locator_name) {
   const locatorStr = objects[page][locatorKey];
   return isXPath(locatorStr)
     ? cy.xpath(locatorStr, { timeout: 60000 })
-    : cy.get(locatorStr,   { timeout: 60000 });
+    : cy.get(locatorStr, { timeout: 60000 });
 }
 
 /**
@@ -47,22 +47,22 @@ function getElement(page_name, locator_name) {
  */
 function buildPrintWindowStub() {
   const stubDoc = {
-    title:         '',
-    head:          { querySelector: () => null },
-    write:         () => {},
-    close:         () => {},
-    createElement: () => ({ style: {}, setAttribute: () => {}, click: () => {} }),
+    title: '',
+    head: { querySelector: () => null },
+    write: () => { },
+    close: () => { },
+    createElement: () => ({ style: {}, setAttribute: () => { }, click: () => { } }),
   };
   const stub = {
-    document:              stubDoc,
-    focus:                 () => {},
-    print:                 () => {},
-    close:                 () => {},
-    onload:                null,
-    addEventListener:      () => {},
-    removeEventListener:   () => {},
-    clearTimeout:          () => {},
-    setTimeout:            (_fn, _ms) => 0,
+    document: stubDoc,
+    focus: () => { },
+    print: () => { },
+    close: () => { },
+    onload: null,
+    addEventListener: () => { },
+    removeEventListener: () => { },
+    clearTimeout: () => { },
+    setTimeout: (_fn, _ms) => 0,
   };
   // printWebBook sets iframeWindow.onload then immediately calls iframeDoc.close(),
   // so we fire the onload callback synchronously once it is assigned.
@@ -70,7 +70,7 @@ function buildPrintWindowStub() {
     set(target, prop, value) {
       target[prop] = value;
       if (prop === 'onload' && typeof value === 'function') {
-        try { value(); } catch (_) {}
+        try { value(); } catch (_) { }
       }
       return true;
     },
@@ -82,11 +82,11 @@ function buildPrintWindowStub() {
 // ---------------------------------------------------------------------------
 
 Cypress.Commands.add('injectFakeOneTrustCookies', () => {
-  const bannerClosed      = 'OptanonAlertBoxClosed';
+  const bannerClosed = 'OptanonAlertBoxClosed';
   const bannerClosedValue = new Date(Date.now() - 60 * 1000).toISOString();
   Cypress.on('window:before:load', (win) => {
-    const hostname   = win.location.hostname || '';
-    const expires    = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+    const hostname = win.location.hostname || '';
+    const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
     const domainPart = hostname ? `; domain=${hostname}` : '';
     win.document.cookie = `${bannerClosed}=${bannerClosedValue}; expires=${expires}; path=/${domainPart}`;
   });
@@ -109,12 +109,12 @@ Cypress.Commands.add('clearCookiesAndStorage', () => {
 Cypress.Commands.add('stubGeminiApiToFail', () => {
   cy.intercept('POST', '**/generativelanguage.googleapis.com/**', {
     statusCode: 401,
-    headers:    { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json' },
     body: {
       error: {
-        code:    401,
+        code: 401,
         message: 'API_KEY_INVALID — stubbed by Cypress test harness',
-        status:  'UNAUTHENTICATED',
+        status: 'UNAUTHENTICATED',
       },
     },
   }).as('geminiApiStub');
@@ -130,8 +130,8 @@ Cypress.Commands.add('mockFallbackSearchResults', (fixtureName = 'search-fallbac
   cy.fixture(fixtureName).then((payload) => {
     cy.intercept('GET', SEARCH_FALLBACK_ROUTE, {
       statusCode: 200,
-      headers:    { 'content-type': 'application/json' },
-      body:       payload,
+      headers: { 'content-type': 'application/json' },
+      body: payload,
     }).as('searchFallback');
   });
 });
@@ -154,8 +154,8 @@ Cypress.Commands.add('stubWebBookExportHandlers', () => {
   // ── High-Res PDF endpoint ────────────────────────────────────────────────
   cy.intercept('POST', PDF_EXPORT_ROUTE, {
     statusCode: 200,
-    headers:    { 'content-type': 'application/pdf' },
-    body:       'MOCK_PDF',
+    headers: { 'content-type': 'application/pdf' },
+    body: 'MOCK_PDF',
   }).as('pdfExport');
 
   // ── Chapter images (picsum) – return a 1×1 PNG fixture ──────────────────
@@ -163,13 +163,13 @@ Cypress.Commands.add('stubWebBookExportHandlers', () => {
   cy.fixture('1x1.png', 'binary').then((pngBinary) => {
     cy.intercept('GET', PICSUM_ROUTE, {
       statusCode: 200,
-      headers:    { 'content-type': 'image/png' },
-      body:       pngBinary,
+      headers: { 'content-type': 'image/png' },
+      body: pngBinary,
     }).as('picsumImage');
   });
 
   // ── Google Fonts – return empty so export HTML builds without CDN delays ─
-  cy.intercept('GET', FONTS_GOOGLE_ROUTE,  { statusCode: 204, body: '' }).as('googleFontsCSS');
+  cy.intercept('GET', FONTS_GOOGLE_ROUTE, { statusCode: 204, body: '' }).as('googleFontsCSS');
   cy.intercept('GET', FONTS_GSTATIC_ROUTE, { statusCode: 204, body: '' }).as('googleFontsFiles');
 
   // ── Window / download stubs ──────────────────────────────────────────────

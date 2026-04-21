@@ -4,7 +4,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 
 const projectRoot = path.resolve(__dirname, "..", "..");
-const baseUrl = "http://localhost:3001";
+const baseUrl = "http://localhost:3000";
 
 function getCommand(name, args) {
   if (process.platform === "win32") {
