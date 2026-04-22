@@ -250,11 +250,9 @@ tests/
 
 - `tests/cypress/e2e/features/` holds the active Gherkin feature files matched by `specPattern` in `cypress.config.cjs`.
 - `tests/cypress/e2e/common/` holds the active Cucumber step definitions (given, when, then).
+- `tests/cypress/e2e/pageObjects/` contains the selector maps imported by `tests/cypress/support/commands.js`.
 - `tests/cypress/fixtures/` stores stubbed API payloads and test data used by `cy.fixture()`.
-- `tests/cypress/pageObjects/` contains the selector maps imported by `tests/cypress/support/commands.js`.
-- `tests/cypress/e2e/pageObjects/` is a mirrored copy of the same selectors kept in sync with the e2e tree.
 - `tests/cypress/support/` bootstraps Cypress and registers all reusable custom commands.
-- `tests/cypress/features/` is an empty legacy directory — it is not matched by `specPattern` and can be removed safely.
 - `tests/server/` contains server-side unit tests run via `npm run test:unit`.
 - `tests/scripts/smoke/` contains informal one-off debugging scripts for manual verification of server internals.
 
