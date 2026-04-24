@@ -215,10 +215,10 @@ Feature: Web-Book Engine Evolution Pipeline
   # ─────────────────────────────────────────────────────────
   # SCENARIO 16: Google + DuckDuckGo fallback → complete
   # Gemini is stubbed to 401; fallback (google_duckduckgo) is
-  # enabled; fixture returns data → evolution completes.
+  # enabled; a live-shaped snippet-only fixture returns data → evolution completes.
   # ─────────────────────────────────────────────────────────
   Scenario: Generation completes via Google and DuckDuckGo fallback when Gemini key is absent
-    Given I stub fallback search results using fixture "search-fallback-quantum-physics.json"
+    Given I stub fallback search results using fixture "search-fallback-quantum-physics-live-shape.json"
     When I navigate to "DEV" URL and close cookies pop up window
     And I select fallback mode "google_duckduckgo"
     And I enter "Quantum Physics" in "search_input" on "WebBookEngine_Page"

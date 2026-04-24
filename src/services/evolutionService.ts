@@ -603,7 +603,7 @@ function buildUnavailableFallbackSearchError(
         : 'live fallback search (Google + DuckDuckGo)';
 
   return new Error(
-    `${reasonText}; ${fallbackLabel} was unavailable, so no external evidence could be gathered for "${query}".`
+    `${reasonText}; ${fallbackLabel} was unavailable or returned too little usable evidence, so no external evidence could be gathered for "${query}".`
   );
 }
 
@@ -742,17 +742,22 @@ function dedupeSentences(text: string, maxSentences = Number.POSITIVE_INFINITY):
 }
 
 function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
+  const rawCollapsed = text
+    .replace(/\s+/g, ' ')
+    .replace(/\.\.\.\s*(?=[A-Z])/g, ' ')
+    .trim();
   const cleaned = sanitizeNarrativeText(text)
     .replace(/\s+/g, ' ')
     .replace(/\.\.\.\s*(?=[A-Z])/g, ' ')
     .trim();
+  const candidate = cleaned || rawCollapsed;
 
-  const uniqueSentences = dedupeSentences(cleaned, maxSentences);
+  const uniqueSentences = dedupeSentences(candidate, maxSentences);
   if (uniqueSentences.length > 0) {
     return uniqueSentences.join(' ');
   }
 
-  return cleaned;
+  return candidate;
 }
 
 function sanitizeSourceTitle(title: string): string {
@@ -844,7 +849,16 @@ function hasUsableFallbackPayload(payload?: SearchFallbackPayload): boolean {
     return false;
   }
 
-  return selectDistinctFallbackResults(payload.results, CONSOLIDATED_SOURCE_POOL_SIZE).length > 0;
+  const summary = sanitizeFallbackSnippet(payload.summary, 6);
+  if (countWords(summary) >= MIN_USABLE_SOURCE_WORD_COUNT && isMeaningfulText(summary)) {
+    return true;
+  }
+
+  return selectDistinctFallbackResults(payload.results, CONSOLIDATED_SOURCE_POOL_SIZE)
+    .some((result) => {
+      const evidenceText = buildFallbackResultEvidenceText(result);
+      return countWords(evidenceText) >= MIN_USABLE_SOURCE_WORD_COUNT && isMeaningfulText(evidenceText);
+    });
 }
 
 function buildSearchSummaryFromPopulation(population: WebPageGenotype[], topic: string): string {
@@ -1209,9 +1223,10 @@ export async function searchAndExtract(
     }
 
     const fallbackPayload = await safeFetchSearchFallback(query, 'Gemini search recovery', options);
-    if (fallbackPayload) {
+    if (fallbackPayload && hasUsableFallbackPayload(fallbackPayload)) {
+      const fallbackPopulation = buildFallbackPopulation(fallbackPayload);
       return {
-        results: buildFallbackPopulation(fallbackPayload),
+        results: fallbackPopulation,
         artifacts: {
           groundingChunks: mapFallbackArtifacts(fallbackPayload),
           searchSummary: fallbackPayload.summary,
@@ -1987,14 +2002,14 @@ function buildFallbackNarrativeContent(
     }
   }
 
+  content = pruneFallbackNarrativeContent(content);
+
   if (countWords(content) < 80) {
     const bridgeParagraph = buildFallbackBridgeParagraph(topic, chapterTitle, summary, distinctEvidence);
     if (bridgeParagraph && calculateTextSimilarity(content, bridgeParagraph) < 0.78) {
       content = `${content}\n\n${bridgeParagraph}`.trim();
     }
   }
-
-  content = pruneFallbackNarrativeContent(content);
   if (!content) {
     return {
       content: '',
