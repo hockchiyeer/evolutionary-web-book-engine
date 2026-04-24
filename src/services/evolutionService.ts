@@ -269,7 +269,7 @@ function pruneFallbackNarrativeContent(content: string): string {
 
 function formatGeminiError(error: unknown): string {
   const errorObject = typeof error === 'object' && error !== null ? error as Record<string, unknown> : null;
-  
+
   let jsonString = '';
   if (errorObject && typeof error !== 'string') {
     try {
@@ -763,9 +763,9 @@ function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
 function sanitizeSourceTitle(title: string): string {
   return sanitizeStructuredLabel(
     title
-    .replace(/\s+/g, ' ')
-    .replace(/^(?:(?:\[(?:pdf|doc|docs|docx|docss)\]|\((?:pdf|doc|docs|docx|docss)\)|(?:pdf|doc|docs|docx|docss)\b)\s*[-:|]?\s*)+/i, '')
-    .trim(),
+      .replace(/\s+/g, ' ')
+      .replace(/^(?:(?:\[(?:pdf|doc|docs|docx|docss)\]|\((?:pdf|doc|docs|docx|docss)\)|(?:pdf|doc|docs|docx|docss)\b)\s*[-:|]?\s*)+/i, '')
+      .trim(),
     ''
   );
 }
@@ -1962,53 +1962,49 @@ function buildFallbackNarrativeContent(
   const selectedSentences = novelSentences.length >= FALLBACK_MIN_SENTENCE_POOL
     ? novelSentences
     : candidateSentences.slice(0, FALLBACK_MAX_SENTENCE_POOL);
+  let content = '';
+
   if (selectedSentences.length === 0) {
     const fallbackSummarySentences = filterReaderFacingFallbackSentences(
       collectDistinctSentences([summary], 3)
     );
 
-    if (fallbackSummarySentences.length === 0) {
-      return {
-        content: '',
-        novelSentences: [],
-      };
-    }
-
-    const summaryContent = fallbackSummarySentences.join(' ').trim();
-    return {
-      content: summaryContent,
-      novelSentences: fallbackSummarySentences,
-    };
-  }
-
-  const paragraphCount = Math.max(
-    FALLBACK_TARGET_PARAGRAPH_COUNT,
-    Math.min(8, Math.ceil(selectedSentences.length / 3))
-  );
-  let cursor = selectedSentences.length;
-  const paragraphs = buildFallbackParagraphsFromSentences(selectedSentences, paragraphCount);
-
-  let content = paragraphs.join('\n\n').trim();
-
-  if (countWords(content) < FALLBACK_MIN_CHAPTER_WORD_COUNT && cursor < candidateSentences.length) {
-    const remainingSentences = candidateSentences.slice(cursor, cursor + FALLBACK_MAX_SENTENCE_POOL);
-    const extraParagraphs = buildFallbackParagraphsFromSentences(
-      remainingSentences,
-      Math.max(1, Math.ceil(remainingSentences.length / 3))
+    content = fallbackSummarySentences.join(' ').trim();
+  } else {
+    const paragraphCount = Math.max(
+      FALLBACK_TARGET_PARAGRAPH_COUNT,
+      Math.min(8, Math.ceil(selectedSentences.length / 3))
     );
+    let cursor = selectedSentences.length;
+    const paragraphs = buildFallbackParagraphsFromSentences(selectedSentences, paragraphCount);
 
-    if (extraParagraphs.length > 0) {
-      content = `${content}\n\n${extraParagraphs.join('\n\n')}`.trim();
+    content = paragraphs.join('\n\n').trim();
+
+    if (countWords(content) < FALLBACK_MIN_CHAPTER_WORD_COUNT && cursor < candidateSentences.length) {
+      const remainingSentences = candidateSentences.slice(cursor, cursor + FALLBACK_MAX_SENTENCE_POOL);
+      const extraParagraphs = buildFallbackParagraphsFromSentences(
+        remainingSentences,
+        Math.max(1, Math.ceil(remainingSentences.length / 3))
+      );
+
+      if (extraParagraphs.length > 0) {
+        content = `${content}\n\n${extraParagraphs.join('\n\n')}`.trim();
+      }
     }
-  }
 
-  content = pruneFallbackNarrativeContent(content);
+    content = pruneFallbackNarrativeContent(content);
+  }
 
   if (countWords(content) < 80) {
+    const supplementals = buildFallbackSupplementalParagraphs(topic, chapterTitle, summary, distinctEvidence);
+    const paragraphs = content ? content.split('\n\n') : [];
+
     const bridgeParagraph = buildFallbackBridgeParagraph(topic, chapterTitle, summary, distinctEvidence);
     if (bridgeParagraph && calculateTextSimilarity(content, bridgeParagraph) < 0.78) {
-      content = `${content}\n\n${bridgeParagraph}`.trim();
+      paragraphs.push(bridgeParagraph);
     }
+
+    content = appendUniqueParagraphs(paragraphs, supplementals).join('\n\n').trim();
   }
   if (!content) {
     return {
@@ -2043,7 +2039,7 @@ function dedupeFallbackChapters(chapters: WebBook['chapters']): WebBook['chapter
       Math.max(1, Math.min(FALLBACK_TARGET_PARAGRAPH_COUNT, Math.ceil(retainedSentences.length / 3)))
     ).join('\n\n').trim();
 
-    const finalContent = rebuiltContent || chapter.content;
+    const finalContent = (rebuiltContent && countWords(rebuiltContent) >= 80) ? rebuiltContent : chapter.content;
     seenSentences.push(...filterReaderFacingFallbackSentences(
       collectDistinctSentences([finalContent], FALLBACK_MAX_SENTENCE_POOL)
     ));
