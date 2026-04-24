@@ -34,7 +34,8 @@ This repository now includes:
 
 - `src/App.tsx` is now a thin page-level orchestrator.
 - `src/hooks/useWebBookEngine.ts` manages the search/evolution/assembly flow, carries the expanded assembly input set, and publishes artifact data to the UI.
-- `src/components/` contains the header, sidebar, history drawer, and Web-book viewer.
+- `src/components/` contains the header, sidebar, and history drawer.
+- `src/WebBookViewer.tsx` renders the main Web-book viewer.
 - `src/components/ControlSidebar.tsx` shows population size, search coverage summary, evolved population, and assembly trace metrics.
 - `src/services/` contains the evolution pipeline, fallback client, history persistence, shared search utilities, and export logic.
 - `src/services/searchFallbackShared.ts` provides centralized text-similarity scoring and stopword utilities shared by the evolution pipeline and the server-side fallback route.
@@ -69,12 +70,20 @@ This repository now includes:
 
 ## Repo Structure
 
+Key checked-in structure is shown below. Generated local directories such as `artifacts/`, `dist/`, `node_modules/`, and `test-results/` are omitted for clarity.
+
 ```text
 .
 |-- .env.example
+|-- .gitignore
+|-- .npmrc
+|-- GOOGLE_AI_STUDIO_UPLOAD.md
 |-- index.html
+|-- LICENSE.txt
 |-- metadata.json
+|-- package-lock.json
 |-- package.json
+|-- README.md
 |-- tsconfig.json
 |-- vite.config.ts
 |-- scripts
@@ -84,6 +93,12 @@ This repository now includes:
 |   |-- googleSearchFallback.ts
 |   |-- pdfBridge.ts
 |   `-- server.ts
+|-- tests
+|   |-- cypress.config.cjs
+|   |-- cypress.env.config.cjs
+|   |-- server
+|   |-- scripts
+|   `-- cypress
 `-- src
     |-- App.tsx
     |-- index.css
@@ -106,7 +121,8 @@ This repository now includes:
     |   |-- geminiUserFacingErrors.ts
     |   |-- googleSearchFallbackClient.ts
     |   |-- historyService.ts
-    |   `-- searchFallbackShared.ts
+    |   |-- searchFallbackShared.ts
+    |   `-- searchIntakeParser.ts
     `-- utils
         `-- webBookRender.ts
 ```
