@@ -1,4 +1,4 @@
-import type { Chapter, WebBookSourceMode } from "../types.ts";
+import type { Chapter, WebBook, WebBookSourceMode } from "../types.ts";
 
 const POISON_KEYWORDS = [
   "copyright",
@@ -31,6 +31,12 @@ const ASSEMBLY_HEURISTIC = /\b(mov|push|pop|jmp|call|ret|int|add|sub|xor|nop|lea
 const MIN_CHAPTER_TEXT_PAGES = 3;
 const SEARCH_FALLBACK_TEXT_PAGES = 1;
 const TARGET_WORDS_PER_TEXT_PAGE = 250;
+const STRUCTURED_EXPORT_HEADING_PATTERN = /^(?:VISUAL CONCEPT|CORE CONCEPTS|SUB-TOPICS|SOURCES|DEFINITIONS|GLOSSARY|TECHNICAL GLOSSARY)\s*:/i;
+const EXPORT_METADATA_LINE_PATTERN = /^(?:Generated on:|CHAPTER\s+\d+\s*:)/i;
+const JSONISH_KEY_PATTERN = /"(?:url|title|content|definitions|subTopics|summary|term|description|sourceUrl|priorityScore|informativeScore|authorityScore)"\s*:/i;
+const DOMAINISH_PATTERN = /\b(?:https?:\/\/|www\.|(?:[a-z0-9-]+\.)+(?:com|org|net|edu|gov|io|co(?:\.[a-z]{2})?|ac\.uk|co\.uk))\S*/gi;
+const ISO_TIMESTAMP_PATTERN = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/;
+const BULLET_LINE_PATTERN = /^(?:[-*]|\d+[.)])\s+/;
 
 type DefinitionLike = {
   term?: string | null;
@@ -64,14 +70,200 @@ export interface NormalizedSourceLink {
   isSearchResultsPage: boolean;
 }
 
-function normalizeChapterForRender(chapter: Chapter): Chapter {
+function countDomainMentions(text: string): number {
+  return text.match(DOMAINISH_PATTERN)?.length || 0;
+}
+
+function trimWrapperPunctuation(text: string): string {
+  return text
+    .replace(/^[\[\]{}()<>`"'|,:;_-]+/, "")
+    .replace(/[\[\]{}()<>`"'|,:;_-]+$/, "")
+    .trim();
+}
+
+function isLikelyStructuredArtifactLine(line: string): boolean {
+  const normalized = line.trim();
+  if (!normalized) return false;
+
+  if (/^[ \t]*`{3}[a-z0-9_-]*[ \t]*$/i.test(normalized)) return true;
+  if (STRUCTURED_EXPORT_HEADING_PATTERN.test(normalized) || EXPORT_METADATA_LINE_PATTERN.test(normalized)) return true;
+  if (JSONISH_KEY_PATTERN.test(normalized)) return true;
+
+  const jsonishFields = normalized.match(/"[^"]+"\s*:/g)?.length || 0;
+  if ((normalized.startsWith("[") || normalized.startsWith("{")) && jsonishFields >= 1) return true;
+  if (jsonishFields >= 2 && /[\[\]{}]/.test(normalized)) return true;
+  if (/^[\[\]{},"':;]+$/.test(normalized)) return true;
+
+  const domainMentions = countDomainMentions(normalized);
+  if (domainMentions >= 2 && !/[.!?]/.test(normalized)) return true;
+  if (BULLET_LINE_PATTERN.test(normalized) && (domainMentions > 0 || ISO_TIMESTAMP_PATTERN.test(normalized))) return true;
+  if (domainMentions >= 1 && ISO_TIMESTAMP_PATTERN.test(normalized) && !/[.!?]$/.test(normalized)) return true;
+
+  return false;
+}
+
+function isLikelyStructuredArtifactParagraph(paragraph: string): boolean {
+  const normalized = paragraph.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (isLikelyStructuredArtifactLine(normalized)) return true;
+  if (JSONISH_KEY_PATTERN.test(normalized)) return true;
+  return countDomainMentions(normalized) >= 2 && !/[.!?]/.test(normalized);
+}
+
+export function sanitizeNarrativeText(text?: string | null): string {
+  const raw = typeof text === "string" ? text.replace(/\r/g, "\n").trim() : "";
+  if (!raw) {
+    return "";
+  }
+
+  let cleaned = raw.replace(/^[ \t]*`{3}[a-z0-9_-]*[ \t]*$/gim, "").trim();
+  const structuredSectionIndex = cleaned.search(
+    /(?:^|\n)\s*(?:VISUAL CONCEPT|CORE CONCEPTS|SUB-TOPICS|SOURCES|DEFINITIONS|GLOSSARY|TECHNICAL GLOSSARY)\s*:\s*(?:\n|$)/i
+  );
+  if (structuredSectionIndex >= 0) {
+    cleaned = cleaned.slice(0, structuredSectionIndex).trim();
+  }
+
+  const filteredLines: string[] = [];
+  for (const line of cleaned.split("\n")) {
+    const normalizedLine = line.trim();
+    if (!normalizedLine) {
+      if (filteredLines.length > 0 && filteredLines[filteredLines.length - 1] !== "") {
+        filteredLines.push("");
+      }
+      continue;
+    }
+
+    if (isLikelyStructuredArtifactLine(normalizedLine)) {
+      continue;
+    }
+
+    filteredLines.push(normalizedLine);
+  }
+
+  const paragraphs = filteredLines
+    .join("\n")
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim())
+    .filter(Boolean)
+    .filter((paragraph) => !isLikelyStructuredArtifactParagraph(paragraph));
+
+  return trimWrapperPunctuation(paragraphs.join("\n\n")).replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function sanitizeInlineText(text?: string | null): string {
+  return sanitizeNarrativeText(text).replace(/\s+/g, " ").trim();
+}
+
+export function sanitizeStructuredLabel(text?: string | null, fallback = ""): string {
+  const raw = typeof text === "string" ? text.replace(/\r/g, " ").replace(/\s+/g, " ").trim() : "";
+  const normalized = trimWrapperPunctuation(
+    raw
+      .replace(/^[ \t]*`{3}[a-z0-9_-]*[ \t]*/i, "")
+      .replace(/[ \t]*`{3}$/i, "")
+  );
+  const candidate = normalized || sanitizeInlineText(raw);
+
+  if (!candidate) return fallback.trim();
+  if (STRUCTURED_EXPORT_HEADING_PATTERN.test(candidate) || EXPORT_METADATA_LINE_PATTERN.test(candidate)) {
+    return fallback.trim();
+  }
+  if (JSONISH_KEY_PATTERN.test(candidate) || isLikelyStructuredArtifactLine(candidate)) {
+    return fallback.trim();
+  }
+  if (countDomainMentions(candidate) > 0 && candidate.length < 120) {
+    return fallback.trim();
+  }
+  if (!/[a-z0-9]/i.test(candidate) || candidate.length === 1) {
+    return fallback.trim();
+  }
+
+  return candidate.slice(0, 160).trim() || fallback.trim();
+}
+
+function sanitizeChapterForPresentation(chapter: Chapter, index: number, topic = ""): Chapter {
+  const fallbackTitle = `Chapter ${index + 1}`;
+  const safeTopic = sanitizeStructuredLabel(topic, "knowledge") || "knowledge";
+  const title = sanitizeStructuredLabel(chapter?.title, fallbackTitle) || fallbackTitle;
+  const content = sanitizeNarrativeText(chapter?.content || "");
+  const visualSeed = sanitizeStructuredLabel(chapter?.visualSeed, title || safeTopic) || safeTopic;
+  const definitions = Array.isArray(chapter?.definitions)
+    ? chapter.definitions
+      .map((definition) => ({
+        ...definition,
+        term: sanitizeStructuredLabel(definition?.term, ""),
+        description: sanitizeInlineText(definition?.description || ""),
+      }))
+      .filter((definition) => definition.term && definition.description)
+    : [];
+  const subTopics = Array.isArray(chapter?.subTopics)
+    ? chapter.subTopics
+      .map((subTopic) => ({
+        ...subTopic,
+        title: sanitizeStructuredLabel(subTopic?.title, ""),
+        summary: sanitizeInlineText(subTopic?.summary || ""),
+      }))
+      .filter((subTopic) => subTopic.title && subTopic.summary)
+    : [];
+  const sourceUrls = Array.isArray(chapter?.sourceUrls)
+    ? chapter.sourceUrls
+      .map((source) => {
+        if (typeof source === "string") {
+          return source.trim();
+        }
+
+        if (!source?.url?.trim()) {
+          return null;
+        }
+
+        return {
+          title: sanitizeStructuredLabel(source.title, source.url),
+          url: source.url.trim(),
+        };
+      })
+      .filter((source): source is Chapter["sourceUrls"][number] => Boolean(source))
+    : [];
+
   return {
-    title: typeof chapter?.title === "string" && chapter.title.trim() ? chapter.title.trim() : "Untitled Chapter",
-    content: typeof chapter?.content === "string" ? chapter.content : "",
-    definitions: Array.isArray(chapter?.definitions) ? chapter.definitions : [],
-    subTopics: Array.isArray(chapter?.subTopics) ? chapter.subTopics : [],
-    sourceUrls: Array.isArray(chapter?.sourceUrls) ? chapter.sourceUrls : [],
-    visualSeed: typeof chapter?.visualSeed === "string" && chapter.visualSeed.trim() ? chapter.visualSeed.trim() : "knowledge",
+    title,
+    content,
+    definitions,
+    subTopics,
+    sourceUrls,
+    visualSeed,
+  };
+}
+
+export function sanitizeWebBookForPresentation(webBook: WebBook): WebBook {
+  const topic = sanitizeStructuredLabel(webBook?.topic, "Untitled WebBook") || "Untitled WebBook";
+  const chapters = Array.isArray(webBook?.chapters)
+    ? webBook.chapters
+      .map((chapter, index) => sanitizeChapterForPresentation(chapter, index, topic))
+      .filter((chapter) => chapter.content || chapter.definitions.length > 0 || chapter.subTopics.length > 0)
+    : [];
+
+  return {
+    ...webBook,
+    topic,
+    chapters,
+  };
+}
+
+function normalizeChapterForRender(chapter: Chapter, index: number): Chapter {
+  const sanitizedChapter = sanitizeChapterForPresentation(chapter, index);
+  return {
+    title: sanitizedChapter.title || "Untitled Chapter",
+    content: sanitizedChapter.content || "",
+    definitions: sanitizedChapter.definitions || [],
+    subTopics: sanitizedChapter.subTopics || [],
+    sourceUrls: sanitizedChapter.sourceUrls || [],
+    visualSeed: sanitizedChapter.visualSeed || "knowledge",
   };
 }
 
@@ -355,7 +547,7 @@ export function buildChapterRenderPlan(
   options: { sourceMode?: WebBookSourceMode } = {}
 ): ChapterRenderPlan[] {
   const narrativePageCount = getNarrativePageCount(options.sourceMode);
-  const safeChapters = Array.isArray(chapters) ? chapters.map(normalizeChapterForRender) : [];
+  const safeChapters = Array.isArray(chapters) ? chapters.map((chapter, index) => normalizeChapterForRender(chapter, index)) : [];
   let nextPageNumber = 3;
   const pageKinds: ChapterNarrativePage["pageKind"][] = ["opening", "analysis", "synthesis"];
 

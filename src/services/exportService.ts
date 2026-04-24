@@ -1,6 +1,7 @@
 import type { WebBook } from '../types';
 import { buildWebBookDocx } from './docxExport';
 import { getWebBookDocumentTitle } from './documentTitle';
+import { sanitizeWebBookForPresentation } from '../utils/webBookRender';
 import {
   buildPdfHtmlDocument,
   buildPrintHtmlDocument,
@@ -16,10 +17,11 @@ function formatSourceLink(source: string | { title: string; url: string }): stri
 }
 
 export async function exportWebBookToTxt(webBook: WebBook): Promise<void> {
-  let text = `${webBook.topic.toUpperCase()}\n`;
-  text += `Generated on: ${new Date(webBook.timestamp).toLocaleString()}\n\n`;
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
+  let text = `${safeWebBook.topic.toUpperCase()}\n`;
+  text += `Generated on: ${new Date(safeWebBook.timestamp).toLocaleString()}\n\n`;
 
-  webBook.chapters.forEach((chapter, index) => {
+  safeWebBook.chapters.forEach((chapter, index) => {
     text += `CHAPTER ${index + 1}: ${chapter.title}\n`;
     text += `${'='.repeat(chapter.title.length + 11)}\n\n`;
     text += `${chapter.content}\n\n`;
@@ -41,26 +43,29 @@ export async function exportWebBookToTxt(webBook: WebBook): Promise<void> {
 
   downloadBlob(
     new Blob([text], { type: 'text/plain' }),
-    getExportFileName(webBook.topic, 'txt')
+    getExportFileName(safeWebBook.topic, 'txt')
   );
 }
 
 export async function exportWebBookToHtml(webBook: WebBook): Promise<void> {
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
   const { clone } = await prepareExportContent(getWebBookElement());
-  const blob = new Blob([buildStandaloneHtmlDocument(webBook, clone.outerHTML)], { type: 'text/html' });
-  downloadBlob(blob, getExportFileName(webBook.topic, 'html'));
+  const blob = new Blob([buildStandaloneHtmlDocument(safeWebBook, clone.outerHTML)], { type: 'text/html' });
+  downloadBlob(blob, getExportFileName(safeWebBook.topic, 'html'));
 }
 
 export async function exportWebBookToWord(webBook: WebBook): Promise<void> {
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
   const { chapterImages } = await prepareExportContent(getWebBookElement());
-  const blob = new Blob([buildWebBookDocx(webBook, chapterImages)], {
+  const blob = new Blob([buildWebBookDocx(safeWebBook, chapterImages)], {
     type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   });
 
-  downloadBlob(blob, getExportFileName(webBook.topic, 'docx'));
+  downloadBlob(blob, getExportFileName(safeWebBook.topic, 'docx'));
 }
 
 export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
   const { clone } = await prepareExportContent(getWebBookElement());
   
   // Increase fetch timeout for PDF generation to 5 minutes
@@ -74,8 +79,8 @@ export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        html: buildPdfHtmlDocument(webBook, clone.outerHTML),
-        fileName: webBook.topic.replace(/\s+/g, '_'),
+        html: buildPdfHtmlDocument(safeWebBook, clone.outerHTML),
+        fileName: safeWebBook.topic.replace(/\s+/g, '_'),
       }),
       signal: controller.signal,
     });
@@ -88,7 +93,7 @@ export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
     }
 
     const blob = await response.blob();
-    downloadBlob(blob, getExportFileName(webBook.topic, 'pdf'));
+    downloadBlob(blob, getExportFileName(safeWebBook.topic, 'pdf'));
   } catch (error: any) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError') {
@@ -99,9 +104,15 @@ export async function exportWebBookToPdf(webBook: WebBook): Promise<void> {
 }
 
 export async function printWebBook(webBook: WebBook): Promise<void> {
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
   const { clone } = await prepareExportContent(getWebBookElement());
-  const htmlContent = buildPrintHtmlDocument(webBook, clone.outerHTML);
-  const printTitle = getWebBookDocumentTitle(webBook.topic);
+  const htmlContent = buildPrintHtmlDocument(safeWebBook, clone.outerHTML);
+  const printTitle = getWebBookDocumentTitle(safeWebBook.topic);
+  const printFileName = getExportFileName(safeWebBook.topic, 'pdf');
+  const printPreviewUrl = new URL(
+    `/print-preview/${encodeURIComponent(printFileName)}`,
+    window.location.origin
+  ).toString();
 
   const iframe = document.createElement('iframe');
   iframe.style.position = 'fixed';
@@ -111,7 +122,7 @@ export async function printWebBook(webBook: WebBook): Promise<void> {
   iframe.style.height = '0';
   iframe.style.border = '0';
   iframe.title = printTitle;
-  iframe.name = printTitle;
+  iframe.name = printFileName;
   document.body.appendChild(iframe);
 
   const iframeWindow = iframe.contentWindow;
@@ -156,6 +167,11 @@ export async function printWebBook(webBook: WebBook): Promise<void> {
   // Wait for resources to load in the iframe before printing
   iframeWindow.onload = () => {
     iframeWindow.document.title = printTitle;
+    try {
+      iframeWindow.history.replaceState(null, printTitle, printPreviewUrl);
+    } catch (error) {
+      console.warn('Failed to set print preview URL for PDF filename hint.', error);
+    }
     cleanupFallbackTimer = window.setTimeout(cleanup, 300_000);
     printDelayTimer = window.setTimeout(() => {
       iframeWindow.focus();

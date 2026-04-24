@@ -13,7 +13,15 @@ import type {
 } from '../types';
 import { fetchGoogleSearchFallback } from './googleSearchFallbackClient';
 import { GEMINI_REQUEST_TIMEOUT_MS, buildGeminiUserFacingErrorMessage } from './geminiUserFacingErrors';
-import { getRenderableDefinitions, getRenderableSubTopics, isMeaningfulText } from '../utils/webBookRender';
+import { parseSearchExtractionResponse, tryParseLooseJson } from './searchIntakeParser';
+import {
+  getRenderableDefinitions,
+  getRenderableSubTopics,
+  isMeaningfulText,
+  sanitizeNarrativeText,
+  sanitizeStructuredLabel,
+  sanitizeWebBookForPresentation,
+} from '../utils/webBookRender';
 import {
   buildFallbackOverviewTitle,
   buildFallbackSearchUrl as buildSearchUrl,
@@ -211,7 +219,7 @@ function filterReaderFacingFallbackSentences(sentences: string[]): string[] {
     }
 
     const domainMentions = normalized.match(/\b(?:[a-z0-9-]+\.)+(?:com|org|net|edu|gov|wiki|io|co(?:\.[a-z]{2})?)\b/gi) || [];
-    if (domainMentions.length >= 2) {
+    if (domainMentions.length >= 2 && !/[.!?]/.test(normalized)) {
       continue;
     }
 
@@ -440,26 +448,13 @@ function repairTruncatedJSON(jsonString: string): string {
 }
 
 function parseJsonResponse<T>(rawText: string, fallbackMessage: string): T {
-  let cleanText = rawText.trim();
-  const match = cleanText.match(/(?:```(?:json)?\n)?([\s\S]*?)(?:\n```)?$/i);
-  if (match && match[1]) {
-    cleanText = match[1].trim();
+  const parsed = tryParseLooseJson(rawText);
+  if (parsed !== null) {
+    return parsed as T;
   }
 
-  if (cleanText.startsWith('```')) {
-    cleanText = cleanText.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
-  }
-
-  try {
-    return JSON.parse(cleanText) as T;
-  } catch {
-    try {
-      return JSON.parse(repairTruncatedJSON(cleanText)) as T;
-    } catch {
-      console.error('Failed to parse model JSON:', rawText);
-      throw new Error(fallbackMessage);
-    }
-  }
+  console.error('Failed to parse model JSON:', rawText);
+  throw new Error(fallbackMessage);
 }
 
 function classifyGeminiError(error: unknown): SearchFallbackReason | null {
@@ -747,7 +742,7 @@ function dedupeSentences(text: string, maxSentences = Number.POSITIVE_INFINITY):
 }
 
 function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
-  const cleaned = text
+  const cleaned = sanitizeNarrativeText(text)
     .replace(/\s+/g, ' ')
     .replace(/\.\.\.\s*(?=[A-Z])/g, ' ')
     .trim();
@@ -761,10 +756,13 @@ function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
 }
 
 function sanitizeSourceTitle(title: string): string {
-  return title
+  return sanitizeStructuredLabel(
+    title
     .replace(/\s+/g, ' ')
     .replace(/^(?:(?:\[(?:pdf|doc|docs|docx|docss)\]|\((?:pdf|doc|docs|docx|docss)\)|(?:pdf|doc|docs|docx|docss)\b)\s*[-:|]?\s*)+/i, '')
-    .trim();
+    .trim(),
+    ''
+  );
 }
 
 function buildFallbackResultEvidenceText(result: SearchFallbackResult): string {
@@ -873,7 +871,7 @@ function buildSearchSummaryFromPopulation(population: WebPageGenotype[], topic: 
 }
 
 function normalizePopulationText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  return sanitizeNarrativeText(text).replace(/\s+/g, ' ').trim();
 }
 
 function selectDistinctPopulationPages(
@@ -885,7 +883,7 @@ function selectDistinctPopulationPages(
   for (const page of pages) {
     const candidate: WebPageGenotype = {
       ...page,
-      title: sanitizeSourceTitle(page.title || ''),
+      title: sanitizeSourceTitle(page.title || '') || getSourceDomain(page.url),
       content: normalizePopulationText(page.content || ''),
       definitions: getRenderableDefinitions(page.definitions || [], 8),
       subTopics: getRenderableSubTopics(page.subTopics || []).slice(0, 8),
@@ -1106,7 +1104,9 @@ async function enrichGeminiSearchResult(
  * Single-phase Gemini search extraction.
  *
  * Gemini 3 preview supports combining Google Search grounding with structured
- * JSON output. This matches the legacy AI Studio implementation that was
+ * output. JSON is still preferred, but the intake parser can also recover XML,
+ * HTML, and labeled raw-text source lists when Gemini returns richer grounded
+ * search data. This matches the legacy AI Studio implementation that was
  * reported as stable and avoids the failure-prone two-step extraction path.
  *
  */
@@ -1123,7 +1123,7 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
     For each source report: its URL, title, a content summary (3+ sentences), key definitions,
     salient sub-topics, an informative value score (0-1), and an authority score (0-1).`,
     config: {
-      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Output valid JSON only. The JSON must be an array of objects. Each object must contain: "url" (string), "title" (string), "content" (string), "definitions" (array of { "term": string, "description": string }), "subTopics" (array of { "title": string, "summary": string }), "informativeScore" (number), and "authorityScore" (number). Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
+      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Return a structured source list. JSON is preferred, but XML, HTML, or labeled raw text are also acceptable when they preserve the same source fields. Each source must contain: "url" (string), "title" (string), "content" (string), "definitions" (array of { "term": string, "description": string }), "subTopics" (array of { "title": string, "summary": string }), "informativeScore" (number), and "authorityScore" (number). Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
       tools: [{ googleSearch: {} }],
       maxOutputTokens: 8192,
     },
@@ -1142,7 +1142,7 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
     };
   }
 
-  const singlePhaseResults = parseJsonResponse<any[]>(
+  const singlePhaseResults = parseSearchExtractionResponse(
     singlePhaseRawText,
     'The search engine returned an invalid response. Please try a different query.'
   );
@@ -1154,19 +1154,23 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
     };
   }
 
-  const processedSinglePhaseResults = selectDistinctPopulationPages(singlePhaseResults.map((result: any, index: number) => ({
-    ...result,
-    id: `gen-${index}-${Date.now()}`,
-    content: result.content ? String(result.content).substring(0, 2000) : '',
-    definitions: getRenderableDefinitions(
-      (result.definitions || []).map((definition: any) => ({ ...definition, sourceUrl: result.url })),
-      8
-    ),
-    subTopics: getRenderableSubTopics(
-      (result.subTopics || []).map((subTopic: any) => ({ ...subTopic, sourceUrl: result.url }))
-    ).slice(0, 8),
-    fitness: 0,
-  })), CONSOLIDATED_SOURCE_POOL_SIZE);
+  const processedSinglePhaseResults = selectDistinctPopulationPages(singlePhaseResults.map((result: any, index: number) => {
+    const sourceReferenceUrl = /^https?:\/\//i.test(result.url || '') ? result.url : '';
+
+    return {
+      ...result,
+      id: `gen-${index}-${Date.now()}`,
+      content: result.content ? String(result.content).substring(0, 2000) : '',
+      definitions: getRenderableDefinitions(
+        (result.definitions || []).map((definition: any) => ({ ...definition, sourceUrl: definition.sourceUrl || sourceReferenceUrl })),
+        8
+      ),
+      subTopics: getRenderableSubTopics(
+        (result.subTopics || []).map((subTopic: any) => ({ ...subTopic, sourceUrl: subTopic.sourceUrl || sourceReferenceUrl }))
+      ).slice(0, 8),
+      fitness: 0,
+    };
+  }), CONSOLIDATED_SOURCE_POOL_SIZE);
 
   return {
     results: processedSinglePhaseResults,
@@ -1445,13 +1449,18 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
   for (let index = 0; index < outlineData.outline.length; index += concurrencyLimit) {
     const batch = outlineData.outline.slice(index, index + concurrencyLimit);
     const batchResults = await Promise.all(batch.map(async (chapterOutline: any, batchIndex: number) => {
+      const chapterTitle = sanitizeStructuredLabel(
+        chapterOutline?.title,
+        `Chapter ${index + batchIndex + 1}`
+      );
+      const chapterFocus = sanitizeNarrativeText(chapterOutline?.focus || '').replace(/\n{2,}/g, ' ');
       const relevantSources = selectRelevantAssemblySources(chapterOutline, truncatedData);
       const supportingSources = relevantSources.length > 0
         ? relevantSources
         : truncatedData.slice(0, CHAPTER_SOURCE_CONTEXT_SIZE);
       const chapterResponse = await withRetry(() => ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: `Topic: ${topic}. Chapter: ${chapterOutline.title}. Focus: ${chapterOutline.focus}. Source evidence: ${JSON.stringify(supportingSources)}.
+        contents: `Topic: ${topic}. Chapter: ${chapterTitle}. Focus: ${chapterFocus}. Source evidence: ${JSON.stringify(supportingSources)}.
         Write a comprehensive, high-quality long-form chapter of 900-1200 words arranged in 7-9 paragraphs, with enough substance to fill three narrative Web-book pages before the glossary.
         Synthesize at least three distinct source perspectives, noting agreements, tradeoffs, chronology, or practical implications where appropriate.
         Also provide at least 5 detailed definitions, including these terms when relevant: ${(chapterOutline.terms || []).join(', ')}.
@@ -1489,22 +1498,22 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
             required: ['content', 'definitions', 'subTopics'],
           },
         },
-      }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, `Gemini chapter writer: ${chapterOutline.title}`);
+      }), GEMINI_RECONNECT_ATTEMPTS, GEMINI_RETRY_INITIAL_DELAY_MS, `Gemini chapter writer: ${chapterTitle}`);
 
       const chapterData = parseJsonResponse<any>(chapterResponse.text || '', 'The AI returned an invalid chapter response.');
-      const content = normalizePopulationText(chapterData?.content || '');
+      const content = sanitizeNarrativeText(chapterData?.content || '');
       if (!content || !isMeaningfulText(content)) {
         return null;
       }
 
       const sourceBackedContent = countWords(content) >= MIN_CHAPTER_WORD_COUNT
         ? content
-        : `${content}\n\n${filterNovelSentences(
+        : sanitizeNarrativeText(`${content}\n\n${filterNovelSentences(
           dedupeSentences(supportingSources.map((source) => source.content).join(' '), 10),
           dedupeSentences(content, 20),
           0.82,
           6
-        ).join(' ')}`.trim();
+        ).join(' ')}`).trim();
 
       const filteredDefinitions = getRenderableDefinitions(chapterData?.definitions || [], 8)
         .map((definition: any) => ({
@@ -1523,7 +1532,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
         }));
 
       return {
-        title: chapterOutline.title,
+        title: chapterTitle,
         content: sourceBackedContent,
         definitions: filteredDefinitions,
         subTopics: filteredSubTopics,
@@ -1531,7 +1540,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
           supportingSources.map((data) => ({ title: data.title, url: data.url })),
           CHAPTER_SOURCE_CONTEXT_SIZE
         ),
-        visualSeed: chapterOutline.visualSeed || 'evolution',
+        visualSeed: sanitizeStructuredLabel(chapterOutline.visualSeed || '', chapterTitle || topic || 'evolution') || 'evolution',
         priorityScore: chapterOutline.priorityScore || 50,
         originalIndex: index + batchIndex,
       };
@@ -1550,16 +1559,18 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
     .sort((left, right) => left.originalIndex - right.originalIndex)
     .map(({ priorityScore, originalIndex, ...chapter }) => chapter);
 
-  if (!hasRenderableChapters(selectedChapters)) {
-    throw new Error('Gemini returned no renderable chapters for the Web-book.');
-  }
-
-  return {
-    topic: outlineData.topic,
+  const sanitizedBook = sanitizeWebBookForPresentation({
+    topic: sanitizeStructuredLabel(outlineData.topic, topic) || topic,
     chapters: selectedChapters,
     id: `book-${Date.now()}`,
     timestamp: Date.now(),
-  };
+  });
+
+  if (!hasRenderableChapters(sanitizedBook.chapters)) {
+    throw new Error('Gemini returned no renderable chapters for the Web-book.');
+  }
+
+  return sanitizedBook;
 }
 
 function filterNovelSentences(
@@ -1863,6 +1874,22 @@ function buildFallbackScopeParagraph(
   return `The subject therefore extends beyond any single headline. Comparing how ${domains} discuss ${angles} shows the breadth of context, debate, and example surrounding ${chapterTitle.toLowerCase()}.`;
 }
 
+function buildFallbackBridgeParagraph(
+  topic: string,
+  chapterTitle: string,
+  summary: string,
+  evidencePool: FallbackEvidence[]
+): string {
+  const angles = summarizeFallbackAngles(evidencePool, topic);
+  const summarySentence = collectDistinctSentences([summary], 1)
+    .find((sentence) => !containsFallbackNarrativeMeta(sentence));
+
+  return normalizePopulationText([
+    `Overall, the available search evidence keeps ${chapterTitle.toLowerCase()} connected to ${angles} within the broader story of ${topic}.`,
+    summarySentence || '',
+  ].join(' '));
+}
+
 function appendUniqueParagraphs(paragraphs: string[], additions: string[]): string[] {
   for (const addition of additions) {
     const normalized = addition.replace(/\s+/g, ' ').trim();
@@ -1959,6 +1986,14 @@ function buildFallbackNarrativeContent(
       content = `${content}\n\n${extraParagraphs.join('\n\n')}`.trim();
     }
   }
+
+  if (countWords(content) < 80) {
+    const bridgeParagraph = buildFallbackBridgeParagraph(topic, chapterTitle, summary, distinctEvidence);
+    if (bridgeParagraph && calculateTextSimilarity(content, bridgeParagraph) < 0.78) {
+      content = `${content}\n\n${bridgeParagraph}`.trim();
+    }
+  }
+
   content = pruneFallbackNarrativeContent(content);
   if (!content) {
     return {
@@ -2368,14 +2403,7 @@ function createFallbackWebBook(
     [...chapterPool, ...supplementalChapters].slice(0, FINAL_WEBBOOK_CHAPTER_COUNT)
   );
 
-  if (!hasRenderableChapters(finalChapters)) {
-    const reason = fallbackReason ? ` (Reason: ${fallbackReason})` : '';
-    throw new Error(
-      `Web-book assembly failed: Neither Gemini nor live search fallback could yield enough renderable content for "${topic}".${reason}`
-    );
-  }
-
-  return {
+  const sanitizedFallbackBook = sanitizeWebBookForPresentation({
     topic,
     chapters: finalChapters,
     id: `book-${Date.now()}`,
@@ -2384,17 +2412,26 @@ function createFallbackWebBook(
     generationNote,
     fallbackSource,
     fallbackReason,
-  };
+  });
+
+  if (!hasRenderableChapters(sanitizedFallbackBook.chapters)) {
+    const reason = fallbackReason ? ` (Reason: ${fallbackReason})` : '';
+    throw new Error(
+      `Web-book assembly failed: Neither Gemini nor live search fallback could yield enough renderable content for "${topic}".${reason}`
+    );
+  }
+
+  return sanitizedFallbackBook;
 }
 
 function applyBookMetadata(book: WebBook, context?: Partial<SearchAndExtractResult>): WebBook {
-  return {
+  return sanitizeWebBookForPresentation({
     ...book,
     sourceMode: context?.sourceMode || book.sourceMode,
     generationNote: context?.generationNote || book.generationNote,
     fallbackSource: context?.fallbackSource || book.fallbackSource,
     fallbackReason: context?.fallbackReason || book.fallbackReason,
-  };
+  });
 }
 
 export async function assembleWebBook(

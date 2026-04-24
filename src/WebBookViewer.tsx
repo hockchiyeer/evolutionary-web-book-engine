@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowUpRight, BookOpen, CheckCircle2, Globe2, Image as ImageIcon, Layers } from 'lucide-react';
 import type { WebBook } from './types';
-import { buildChapterRenderPlan, getChapterSourceLinks } from './utils/webBookRender';
+import { buildChapterRenderPlan, getChapterSourceLinks, sanitizeWebBookForPresentation } from './utils/webBookRender';
 
 interface WebBookViewerProps {
   webBook: WebBook;
@@ -21,8 +21,9 @@ function getNarrativeLabel(pageIndex: number): string {
 }
 
 export function WebBookViewer({ webBook }: WebBookViewerProps) {
-  const safeChapters = Array.isArray(webBook?.chapters) ? webBook.chapters : [];
-  const chapterRenderPlan = buildChapterRenderPlan(safeChapters, { sourceMode: webBook?.sourceMode });
+  const safeWebBook = sanitizeWebBookForPresentation(webBook);
+  const safeChapters = Array.isArray(safeWebBook?.chapters) ? safeWebBook.chapters : [];
+  const chapterRenderPlan = buildChapterRenderPlan(safeChapters, { sourceMode: safeWebBook?.sourceMode });
   const finalDocumentPageNumber = chapterRenderPlan.length > 0
     ? chapterRenderPlan[chapterRenderPlan.length - 1].glossaryPageNumber + 1
     : 3;
@@ -37,7 +38,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
             </div>
             <span className="text-[10px] uppercase tracking-[0.5em] opacity-60">Evolutionary Web-Book Engine</span>
           </div>
-          <h2 className="text-5xl md:text-7xl font-serif italic font-bold tracking-tighter leading-tight mb-8 break-words">{webBook.topic}</h2>
+          <h2 className="text-5xl md:text-7xl font-serif italic font-bold tracking-tighter leading-tight mb-8 break-words">{safeWebBook.topic}</h2>
           <div className="w-24 h-1 bg-[#E4E3E0] mx-auto mb-12 opacity-30" />
           <div className="flex justify-center gap-16">
             <div className="flex flex-col">
@@ -50,7 +51,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
             </div>
             <div className="flex flex-col">
               <span className="text-[9px] uppercase opacity-50 mb-2 tracking-widest">Date</span>
-              <span className="text-3xl font-mono">{new Date(webBook.timestamp).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</span>
+              <span className="text-3xl font-mono">{new Date(safeWebBook.timestamp).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</span>
             </div>
           </div>
         </div>
@@ -222,7 +223,7 @@ export function WebBookViewer({ webBook }: WebBookViewerProps) {
                     </div>
 
                     <div className="mt-auto pt-10 flex justify-between items-center border-t border-[#141414]/5 text-[10px] font-mono opacity-40 print:hidden">
-                      <span className="break-words">{webBook.topic}</span>
+                      <span className="break-words">{safeWebBook.topic}</span>
                       <span>PAGE {textPage.pageNumber}</span>
                     </div>
                   </section>
