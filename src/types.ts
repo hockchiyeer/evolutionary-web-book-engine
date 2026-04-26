@@ -22,6 +22,26 @@ export interface WebPageGenotype {
   fitness: number;          // F(w)
 }
 
+export const GEMINI_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.5-pro',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-pro',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-3.1-pro',
+  'gemini-1.5-pro-preview',
+  'gemini-1.5-flash-preview',
+  'gemini-2.0-flash-preview',
+  'gemini-2.0-flash-lite-preview',
+  'gemini-2.0-pro-preview',
+  'gemini-2.5-flash-preview',
+  'gemini-2.5-pro-preview',
+  'gemini-3.1-pro-preview',
+] as const;
+export type GeminiModel = typeof GEMINI_MODELS[number];
+
 export const WEB_BOOK_SOURCE_MODES = ['gemini', 'search-fallback'] as const;
 export type WebBookSourceMode = typeof WEB_BOOK_SOURCE_MODES[number];
 
@@ -37,9 +57,11 @@ export type SearchFallbackProvider = typeof SEARCH_FALLBACK_PROVIDERS[number];
 
 export const SEARCH_FALLBACK_MODES = ['off', 'google', 'duckduckgo', 'google_duckduckgo'] as const;
 export type SearchFallbackMode = typeof SEARCH_FALLBACK_MODES[number];
-export interface SearchFallbackOptions {
+export interface EngineOptions {
   mode: SearchFallbackMode;
+  geminiModel?: GeminiModel;
 }
+
 
 export const SEARCH_FALLBACK_REASONS = [
   'missing_api_key',

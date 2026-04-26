@@ -36,6 +36,8 @@ export default function App() {
     notice,
     fallbackMode,
     setFallbackMode,
+    geminiModel,
+    setGeminiModel,
     runSearch,
     startNewSearch,
     viewHistoryItem,
@@ -94,6 +96,8 @@ export default function App() {
           notice={notice}
           fallbackMode={fallbackMode}
           onFallbackModeChange={setFallbackMode}
+          geminiModel={geminiModel}
+          onGeminiModelChange={setGeminiModel}
           showArtifacts={showArtifacts}
           onToggleArtifacts={() => setShowArtifacts((previousState) => !previousState)}
           onSearch={runSearch}

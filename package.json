@@ -8,9 +8,9 @@
     "node": ">=18.18"
   },
   "scripts": {
-    "dev": "vite --configLoader native --port=3000 --host=0.0.0.0",
-    "dev:test": "vite --configLoader native --port=3000 --host=0.0.0.0",
-    "start": "node ./scripts/start-preview.mjs",
+    "dev": "tsx server/server.ts",
+    "dev:test": "tsx server/server.ts",
+    "start": "node --experimental-strip-types server/server.ts",
     "package:aistudio": "node ./scripts/package-google-ai-studio.mjs",
     "build": "vite build",
     "preview": "vite preview",

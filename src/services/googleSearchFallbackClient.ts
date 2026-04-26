@@ -1,4 +1,4 @@
-import type { SearchFallbackMode, SearchFallbackOptions, SearchFallbackPayload } from '../types';
+import type { SearchFallbackMode, EngineOptions, SearchFallbackPayload } from '../types';
 
 const SEARCH_FALLBACK_ROUTE = '/api/search-fallback';
 const FALLBACK_FETCH_ATTEMPTS = 3;
@@ -22,7 +22,7 @@ function buildFallbackModeLabel(mode: SearchFallbackMode): string {
 
 export async function fetchGoogleSearchFallback(
   query: string,
-  options: SearchFallbackOptions = { mode: 'google_duckduckgo' }
+  options: EngineOptions = { mode: 'google_duckduckgo' }
 ): Promise<SearchFallbackPayload> {
   let lastError: Error | null = null;
   const modeLabel = buildFallbackModeLabel(options.mode);

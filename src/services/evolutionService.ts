@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import type {
   SearchArtifact,
-  SearchFallbackOptions,
+  EngineOptions,
   SearchFallbackPayload,
   SearchFallbackProvider,
   SearchFallbackReason,
@@ -533,7 +533,7 @@ function buildFallbackNoticeFromPayload(
 async function safeFetchSearchFallback(
   query: string,
   label: string,
-  options?: SearchFallbackOptions
+  options?: EngineOptions
 ): Promise<SearchFallbackPayload | undefined> {
   try {
     return await fetchGoogleSearchFallback(query, options);
@@ -568,7 +568,7 @@ function buildIncompleteGeminiFallbackNotice(hasLiveFallback: boolean): string {
 
 function buildEmptySearchEvidenceNotice(
   query: string,
-  mode: SearchFallbackOptions['mode'] = 'google_duckduckgo'
+  mode: EngineOptions['mode'] = 'google_duckduckgo'
 ): Error {
   if (mode === 'off') {
     return new Error(
@@ -586,7 +586,7 @@ function buildEmptySearchEvidenceNotice(
 function buildUnavailableFallbackSearchError(
   query: string,
   reason: SearchFallbackReason,
-  mode: SearchFallbackOptions['mode'] = 'google_duckduckgo'
+  mode: EngineOptions['mode'] = 'google_duckduckgo'
 ): Error {
   const reasonText = {
     missing_api_key: 'Gemini API key is missing',
@@ -1039,7 +1039,7 @@ function buildFallbackPopulation(payload: SearchFallbackPayload): WebPageGenotyp
 async function enrichGeminiSearchResult(
   query: string,
   geminiResult: SearchAndExtractResult,
-  options: SearchFallbackOptions = { mode: 'google_duckduckgo' }
+  options: EngineOptions = { mode: 'google_duckduckgo' }
 ): Promise<SearchAndExtractResult> {
   const distinctGeminiResults = selectDistinctPopulationPages(geminiResult.results, CONSOLIDATED_SOURCE_POOL_SIZE);
   const geminiHasUsableEvidence = hasUsableSearchEvidence(distinctGeminiResults);
@@ -1117,11 +1117,11 @@ async function enrichGeminiSearchResult(
  * reported as stable and avoids the failure-prone two-step extraction path.
  *
  */
-async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtractResult> {
+async function searchAndExtractWithGemini(query: string, geminiModel?: string): Promise<SearchAndExtractResult> {
   const ai = getAI();
 
   const singlePhaseResponse = await withRetry(() => ai.models.generateContent({
-    model: GEMINI_SEARCH_MODEL,
+    model: geminiModel || GEMINI_SEARCH_MODEL,
     contents: `Search for comprehensive information about "${query}".
     Identify 10-24 distinct high-quality web pages or sources covering the topic from foundational,
     practical, historical, comparative, and advanced perspectives.
@@ -1194,10 +1194,10 @@ async function searchAndExtractWithGemini(query: string): Promise<SearchAndExtra
 
 export async function searchAndExtract(
   query: string,
-  options: SearchFallbackOptions = { mode: 'google_duckduckgo' }
+  options: EngineOptions = { mode: 'google_duckduckgo' }
 ): Promise<SearchAndExtractResult> {
   try {
-    const geminiResult = await searchAndExtractWithGemini(query);
+    const geminiResult = await searchAndExtractWithGemini(query, options.geminiModel);
     return await enrichGeminiSearchResult(query, geminiResult, options);
   } catch (error) {
     const fallbackReason = classifyGeminiError(error);
@@ -1391,7 +1391,7 @@ function selectRelevantAssemblySources(
   }).map(({ source }) => source);
 }
 
-async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], topic: string): Promise<WebBook> {
+async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], topic: string, geminiModel?: string): Promise<WebBook> {
   const ai = getAI();
   const assemblySourcePool = selectDistinctPopulationPages([
     ...optimalPopulation.filter((page) => !isSyntheticPage(page)),
@@ -1406,7 +1406,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
   }));
 
   const outlineResponse = await withRetry(() => ai.models.generateContent({
-    model: GEMINI_MODEL,
+    model: geminiModel || GEMINI_MODEL,
     contents: `Topic: ${topic}. Source pool: ${JSON.stringify(truncatedData)}.
     Create a detailed 18-chapter candidate pool for a comprehensive Web-book.
     Every chapter must be supportable by multiple distinct sources from the pool, and the final writing should be substantial enough to fill three narrative pages plus one glossary page.
@@ -1467,7 +1467,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
         ? relevantSources
         : truncatedData.slice(0, CHAPTER_SOURCE_CONTEXT_SIZE);
       const chapterResponse = await withRetry(() => ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: geminiModel || GEMINI_MODEL,
         contents: `Topic: ${topic}. Chapter: ${chapterTitle}. Focus: ${chapterFocus}. Source evidence: ${JSON.stringify(supportingSources)}.
         Write a comprehensive, high-quality long-form chapter of 900-1200 words arranged in 7-9 paragraphs, with enough substance to fill three narrative Web-book pages before the glossary.
         Synthesize at least three distinct source perspectives, noting agreements, tradeoffs, chronology, or practical implications where appropriate.
@@ -2442,7 +2442,7 @@ export async function assembleWebBook(
   optimalPopulation: WebPageGenotype[],
   topic: string,
   context?: SearchAndExtractResult,
-  options: SearchFallbackOptions = { mode: 'google_duckduckgo' }
+  options: EngineOptions = { mode: 'google_duckduckgo' }
 ): Promise<WebBook> {
   if (context?.sourceMode === 'search-fallback') {
     return createFallbackWebBook(
@@ -2456,7 +2456,7 @@ export async function assembleWebBook(
   }
 
   try {
-    const book = await assembleWebBookWithGemini(optimalPopulation, topic);
+    const book = await assembleWebBookWithGemini(optimalPopulation, topic, options.geminiModel);
     return applyBookMetadata(book, context);
   } catch (error) {
     const fallbackReason = classifyGeminiError(error);

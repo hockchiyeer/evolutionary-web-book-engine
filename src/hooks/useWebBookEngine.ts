@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { EvolutionState, SearchFallbackMode, WebBook } from '../types';
+import type { EngineOptions, EvolutionState, SearchFallbackMode, WebBook } from '../types';
 import { ASSEMBLY_SOURCE_POOL_SIZE, assembleWebBook, evolve, searchAndExtract } from '../services/evolutionService';
 import {
   clearPersistedSearches,
@@ -43,6 +43,7 @@ export function useWebBookEngine() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [fallbackMode, setFallbackMode] = useState<SearchFallbackMode>('google_duckduckgo');
+  const [geminiModel, setGeminiModel] = useState<EngineOptions['geminiModel']>();
 
   useEffect(() => {
     setHistory(loadLocalHistoryBooks());
@@ -115,7 +116,7 @@ export function useWebBookEngine() {
         console.error('Failed to create persisted search record', persistenceError);
       }
 
-      const searchResult = await searchAndExtract(trimmedQuery, { mode: fallbackMode });
+      const searchResult = await searchAndExtract(trimmedQuery, { mode: fallbackMode, geminiModel });
       ensureActiveRun();
       const initialPopulation = searchResult.results;
       if (initialPopulation.length === 0) {
@@ -171,7 +172,7 @@ export function useWebBookEngine() {
         },
       }));
 
-      const assembledBook = await assembleWebBook(evolvedPopulation, trimmedQuery, searchResult, { mode: fallbackMode });
+      const assembledBook = await assembleWebBook(evolvedPopulation, trimmedQuery, searchResult, { mode: fallbackMode, geminiModel });
       ensureActiveRun();
       const bookWithGenerations = {
         ...assembledBook,
@@ -281,6 +282,8 @@ export function useWebBookEngine() {
     notice,
     fallbackMode,
     setFallbackMode,
+    geminiModel,
+    setGeminiModel,
     runSearch,
     startNewSearch,
     viewHistoryItem,

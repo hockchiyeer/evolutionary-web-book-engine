@@ -71,7 +71,7 @@ This repository now includes:
 
 ## Repo Structure
 
-Key checked-in structure is shown below. Generated local directories such as `artifacts/`, `dist/`, `node_modules/`, and `test-results/` are omitted for clarity.
+Key checked-in structure is shown below. Generated local directories such as `artifacts/`, `dist/`, `node_modules/`, `test-results/`, `tmp_chrome_profile/`, and `tmp_edge_profile/` are omitted for clarity.
 
 ```text
 .
@@ -89,12 +89,14 @@ Key checked-in structure is shown below. Generated local directories such as `ar
 |-- vite.config.ts
 |-- scripts
 |   |-- package-google-ai-studio.mjs
-|   `-- start-preview.mjs
+|   |-- start-preview.mjs
+|   `-- update_options.cjs
 |-- server
 |   |-- googleSearchFallback.ts
 |   |-- pdfBridge.ts
 |   `-- server.ts
 |-- tests
+|   |-- .cypress-cucumber-preprocessorrc.json
 |   |-- cypress.config.cjs
 |   |-- cypress.env.config.cjs
 |   |-- server
