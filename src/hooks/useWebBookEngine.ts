@@ -43,7 +43,7 @@ export function useWebBookEngine() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [fallbackMode, setFallbackMode] = useState<SearchFallbackMode>('google_duckduckgo');
-  const [geminiModel, setGeminiModel] = useState<EngineOptions['geminiModel']>();
+  const [geminiModel, setGeminiModel] = useState<EngineOptions['geminiModel']>('gemini-3.1-pro-preview');
 
   useEffect(() => {
     setHistory(loadLocalHistoryBooks());

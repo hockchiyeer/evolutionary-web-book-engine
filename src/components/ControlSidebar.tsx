@@ -274,6 +274,28 @@ export function ControlSidebar({
 
         <div className="mt-4">
           <div className="flex items-center gap-3">
+            <label htmlFor="gemini-model" className="shrink-0 w-[72px] text-[10px] uppercase font-bold tracking-[0.18em] opacity-60">
+              Model
+            </label>
+            <div className="relative flex-1">
+              <select
+                id="gemini-model"
+                value={geminiModel || 'gemini-3.1-pro-preview'}
+                onChange={(event) => onGeminiModelChange(event.target.value)}
+                disabled={isBusy}
+                title="Choose which Gemini model to use"
+                className="w-full appearance-none bg-[#F5F5F5] border border-[#141414] px-3 py-2 pr-9 text-[11px] font-mono focus:outline-none disabled:opacity-50"
+              >
+                {GEMINI_MODELS.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-4">
             <label htmlFor="fallback-mode" className="shrink-0 w-[72px] text-[10px] uppercase font-bold tracking-[0.18em] opacity-60">
               Fallback
             </label>
@@ -289,28 +311,6 @@ export function ControlSidebar({
                 {FALLBACK_MODE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
-            </div>
-          </div>
-          <div className="flex items-center gap-3 mt-4">
-            <label htmlFor="gemini-model" className="shrink-0 w-[72px] text-[10px] uppercase font-bold tracking-[0.18em] opacity-60">
-              Model
-            </label>
-            <div className="relative flex-1">
-              <select
-                id="gemini-model"
-                value={geminiModel || 'gemini-2.5-flash'}
-                onChange={(event) => onGeminiModelChange(event.target.value)}
-                disabled={isBusy}
-                title="Choose which Gemini model to use"
-                className="w-full appearance-none bg-[#F5F5F5] border border-[#141414] px-3 py-2 pr-9 text-[11px] font-mono focus:outline-none disabled:opacity-50"
-              >
-                {GEMINI_MODELS.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
                   </option>
                 ))}
               </select>
