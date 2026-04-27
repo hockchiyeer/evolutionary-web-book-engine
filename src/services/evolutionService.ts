@@ -744,11 +744,12 @@ function dedupeSentences(text: string, maxSentences = Number.POSITIVE_INFINITY):
 }
 
 function sanitizeFallbackSnippet(text: string, maxSentences = 4): string {
-  const rawCollapsed = text
+  const withoutUrls = text.replace(/https?:\/\/[^\s]+/gi, '').replace(/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\/[^\s]*/gi, '');
+  const rawCollapsed = withoutUrls
     .replace(/\s+/g, ' ')
     .replace(/\.\.\.\s*(?=[A-Z])/g, ' ')
     .trim();
-  const cleaned = sanitizeNarrativeText(text)
+  const cleaned = sanitizeNarrativeText(withoutUrls)
     .replace(/\s+/g, ' ')
     .replace(/\.\.\.\s*(?=[A-Z])/g, ' ')
     .trim();
@@ -1130,7 +1131,7 @@ async function searchAndExtractWithGemini(query: string, geminiModel?: string): 
     For each source report: its URL, title, a content summary (3+ sentences), key definitions,
     salient sub-topics, an informative value score (0-1), and an authority score (0-1).`,
     config: {
-      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Return a structured source list. JSON is preferred, but XML, HTML, or labeled raw text are also acceptable when they preserve the same source fields. Each source must contain: "url" (string), "title" (string), "content" (string), "definitions" (array of { "term": string, "description": string }), "subTopics" (array of { "title": string, "summary": string }), "informativeScore" (number), and "authorityScore" (number). Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
+      systemInstruction: 'You are a precise data extractor. Use Google Search to find real, credible, domain-diverse sources. Return a structured source list. JSON is preferred, but XML, HTML, or labeled raw text are also acceptable when they preserve the same source fields. Each source must contain: "url" (string), "title" (string), "content" (string), "definitions" (array of { "term": string, "description": string }), "subTopics" (array of { "title": string, "summary": string }), "informativeScore" (number), and "authorityScore" (number). Extract only real, meaningful definitions and sub-topics from the search results. Do not generate placeholder text, repetitive text, random numbers, or gibberish. If no meaningful definitions are found for a source, return an empty array.',
       tools: [{ googleSearch: {} }],
       maxOutputTokens: 8192,
     },
@@ -1418,7 +1419,7 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
     5. A visual seed keyword for an image.
     6. A 'priorityScore' (1-100) representing how essential this chapter is to the core topic.`,
     config: {
-      systemInstruction: 'You are a master book architect. Output valid JSON only. Create an 18-chapter candidate pool grounded in the supplied source pool. This is an evolutionary selection process: some chapters will be pruned later based on quality. Ensure a logical flow from basics to advanced. Assign higher priorityScore to foundational and critical chapters. Avoid outline candidates that would lean on only one domain or one narrow perspective. Strictly avoid placeholders or meaningless text.',
+      systemInstruction: 'You are a master book architect. Output valid JSON only. Create an 18-chapter candidate pool grounded in the supplied source pool. This is an evolutionary selection process: some chapters will be pruned later based on quality. Ensure a logical flow from basics to advanced. Assign higher priorityScore to foundational and critical chapters. Avoid outline candidates that would lean on only one domain or one narrow perspective. Strictly avoid placeholders, repetitive texts, or meaningless junk texts.',
       responseMimeType: 'application/json',
       maxOutputTokens: 4096,
       responseSchema: {
@@ -1473,9 +1474,9 @@ async function assembleWebBookWithGemini(optimalPopulation: WebPageGenotype[], t
         Synthesize at least three distinct source perspectives, noting agreements, tradeoffs, chronology, or practical implications where appropriate.
         Also provide at least 5 detailed definitions, including these terms when relevant: ${(chapterOutline.terms || []).join(', ')}.
         And provide 3-5 detailed analyses for the sub-topics: ${(chapterOutline.subTopicTitles || []).join(', ')}.
-        Ground the chapter in the supplied source evidence, synthesizing it into a cohesive explanation rather than copying snippets.`,
+        Ground the chapter in the supplied source evidence, synthesizing it into a cohesive explanation rather than copying snippets. Do NOT include raw URLs, repetitive strings, or meaningless text in your output.`,
         config: {
-          systemInstruction: 'You are an expert technical writer. Output valid JSON only. Be detailed, authoritative, and academic in tone. Use only the supplied source evidence, do not invent facts, and explicitly preserve nuance when sources describe limitations or disagreements. Ensure all definitions and sub-topic analyses are meaningful, human-readable, relevant to the chapter, and tied to the strongest supporting source. The prose must feel substantial enough for three narrative pages without padding or repetition. Strictly avoid generating random numbers, long strings of digits, or meaningless placeholder text.',
+          systemInstruction: 'You are an expert technical writer. Output valid JSON only. Be detailed, authoritative, and academic in tone. Use only the supplied source evidence, do not invent facts, and explicitly preserve nuance when sources describe limitations or disagreements. Ensure all definitions and sub-topic analyses are meaningful, human-readable, relevant to the chapter, and tied to the strongest supporting source. The prose must feel substantial enough for three narrative pages without padding or repetition. Strictly avoid generating random numbers, long strings of digits, raw URLs, repetitive snippets, or meaningless placeholder text. Write cohesively in natural language.',
           responseMimeType: 'application/json',
           maxOutputTokens: 8192,
           responseSchema: {
