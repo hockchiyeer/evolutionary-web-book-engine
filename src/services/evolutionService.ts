@@ -1953,9 +1953,12 @@ function buildFallbackNarrativeContent(
     FALLBACK_MAX_SENTENCE_POOL + 12
   ));
   const novelSentences = filterNovelSentences(candidateSentences, seenSentences, 0.84, FALLBACK_MAX_SENTENCE_POOL);
-  const selectedSentences = novelSentences.length >= FALLBACK_MIN_SENTENCE_POOL
-    ? novelSentences
-    : candidateSentences.slice(0, FALLBACK_MAX_SENTENCE_POOL);
+  let selectedSentences = novelSentences.length > 0 ? novelSentences : candidateSentences.slice(0, 3);
+  if (selectedSentences.length > 0 && selectedSentences.length < FALLBACK_MIN_SENTENCE_POOL) {
+    const needed = FALLBACK_MIN_SENTENCE_POOL - selectedSentences.length;
+    const fillers = candidateSentences.filter(s => !selectedSentences.includes(s)).slice(0, needed);
+    selectedSentences = [...selectedSentences, ...fillers];
+  }
   let content = '';
 
   if (selectedSentences.length === 0) {
@@ -2033,7 +2036,7 @@ function dedupeFallbackChapters(chapters: WebBook['chapters']): WebBook['chapter
       Math.max(1, Math.min(FALLBACK_TARGET_PARAGRAPH_COUNT, Math.ceil(retainedSentences.length / 3)))
     ).join('\n\n').trim();
 
-    const finalContent = (rebuiltContent && countWords(rebuiltContent) >= 80) ? rebuiltContent : chapter.content;
+    const finalContent = rebuiltContent ? rebuiltContent : chapter.content;
     seenSentences.push(...filterReaderFacingFallbackSentences(
       collectDistinctSentences([finalContent], FALLBACK_MAX_SENTENCE_POOL)
     ));
