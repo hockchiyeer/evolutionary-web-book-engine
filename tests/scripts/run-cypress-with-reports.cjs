@@ -44,11 +44,16 @@ function parseArgs(argv) {
 function runCommand(command, args) {
   return new Promise((resolve) => {
     const resolved = getCommand(command, args);
+    const env = { ...process.env };
+    if (command === "npx") {
+      delete env.ELECTRON_RUN_AS_NODE;
+    }
+
     const child = spawn(resolved.command, resolved.args, {
       cwd: projectRoot,
       stdio: "inherit",
       shell: false,
-      env: process.env,
+      env,
     });
 
     child.on("error", () => {

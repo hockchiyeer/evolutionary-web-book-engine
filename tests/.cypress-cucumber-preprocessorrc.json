@@ -1,7 +1,6 @@
 {
   "stepDefinitions": [
-    "tests/cypress/e2e/common/*.js",
-    "tests/cypress/e2e/common/**/*.js"
+    "tests/cypress/e2e/common/*.js"
   ],
   "html": {
     "enabled": true,
@@ -14,7 +13,5 @@
   "json": {
     "enabled": true,
     "output": "test-results/chromeReport/cucumber-report.json"
-  },
-  "omitFiltered": true,
-  "filterSpecs": true
+  }
 }

@@ -20,10 +20,30 @@ When("I enter {string} in {string} on {string}", (value, locator_name, page_name
   cy.enterTheValue(locator_name, page_name, value);
 });
 
+When("I enter a long query in {string} on {string}", (locator_name, page_name) => {
+  cy.enterLongQuery(locator_name, page_name);
+});
+
+When("I press Enter in {string} on {string}", (locator_name, page_name) => {
+  cy.pressEnterInElement(locator_name, page_name);
+});
+
 When("I select {string} in {string} drop-down list on {string}", (value, locator_name, page_name) => {
   cy.selectByValue(value, locator_name, page_name);
 });
 
 When("I select fallback mode {string}", (modeValue) => {
   cy.selectFallbackMode(modeValue);
+});
+
+When("I select Gemini model {string}", (modelValue) => {
+  cy.selectGeminiModel(modelValue);
+});
+
+When("I open history book titled {string}", (title) => {
+  cy.clickHistoryBook(title);
+});
+
+When("I delete history book titled {string}", (title) => {
+  cy.deleteHistoryBook(title);
 });

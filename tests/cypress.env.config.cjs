@@ -2,45 +2,44 @@
  * Cypress Environment Configuration for Web-Book Engine
  */
 
-const ENVIRONMENT_URLS = {
-  'DEV': {
-    "baseUrl": "http://localhost:3000"
-  },
-  'QA': {
-    "baseUrl": "https://qa.webbook-engine.example.com"
-  },
-  'PROD': {
-    "baseUrl": "https://webbook-engine.example.com"
-  }
-};
+const DEFAULT_BASE_URL = 'http://localhost:3000';
 
 const GLOBAL_ENV_VAR_KEYS = [
-  'USER_NAME',
-  'USER_PASSWORD',
   'GEMINI_API_KEY'
 ];
 
 function loadGlobalEnvironmentVariables() {
   const envVars = {};
   GLOBAL_ENV_VAR_KEYS.forEach(key => {
-    envVars[key] = process.env[key];
+    if (process.env[key]) {
+      envVars[key] = process.env[key];
+    }
   });
   return envVars;
 }
 
+function resolveBaseUrl(environment) {
+  return (
+    process.env.CYPRESS_BASE_URL ||
+    process.env[`${environment}_BASE_URL`] ||
+    process.env.BASE_URL ||
+    DEFAULT_BASE_URL
+  );
+}
+
 function getCypressEnvironmentConfig(environment) {
-  const envUrls = ENVIRONMENT_URLS[environment] || ENVIRONMENT_URLS['DEV'];
+  const normalizedEnvironment = (environment || 'DEV').toUpperCase();
   const globalVars = loadGlobalEnvironmentVariables();
 
   return {
-    ...envUrls,
+    baseUrl: resolveBaseUrl(normalizedEnvironment),
     ...globalVars,
-    ENVIRONMENT: environment
+    ENVIRONMENT: normalizedEnvironment
   };
 }
 
 module.exports = {
   getCypressEnvironmentConfig,
   GLOBAL_ENV_VAR_KEYS,
-  ENVIRONMENT_URLS
+  DEFAULT_BASE_URL
 };
